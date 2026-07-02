@@ -22,6 +22,12 @@ dependencies = [
     "configobj",
 ]
 
+[project.optional-dependencies]
+tokyo-drift = [
+    "telescope-sim",
+    "torch",
+]
+
 [project.urls]
 GitHub = "https://github.com/mb2448/fpwfsc"
 
