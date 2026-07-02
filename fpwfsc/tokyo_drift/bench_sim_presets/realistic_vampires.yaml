@@ -1,0 +1,13 @@
+name: realistic_vampires
+description: >
+  Priors matching the misalignments actually observed on VAMPIRES
+  across the 2023-2024 bench sessions - camera rotation in the
+  200-270 deg range (235.4 deg measured, ~5 deg/month drift), modest
+  centering offsets, DM scale within ~10% of nominal, known flip
+  orientation.
+image_rotation_deg: {min: 200.0, max: 270.0}
+dm_rotation_deg: {min: -10.0, max: 0.0}
+crop_offset_px: {min: -10, max: 10}
+dm_scale: {min: 0.9, max: 1.1}
+dm_flip_x_probability: 0.0
+dm_flip_y_probability: 0.0

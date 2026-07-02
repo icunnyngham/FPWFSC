@@ -1,0 +1,11 @@
+name: stress_test
+description: >
+  Full-range priors - the worst case the calibration fitter must
+  survive. Full 360-degree rotation ambiguity implies the fitter needs
+  a coarse global search before local refinement.
+image_rotation_deg: {min: 0.0, max: 360.0}
+dm_rotation_deg: {min: -15.0, max: 15.0}
+crop_offset_px: {min: -30, max: 30}
+dm_scale: {min: 0.5, max: 2.0}
+dm_flip_x_probability: 0.5
+dm_flip_y_probability: 0.5
