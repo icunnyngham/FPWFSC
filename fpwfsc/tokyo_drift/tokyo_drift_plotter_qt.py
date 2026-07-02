@@ -240,12 +240,28 @@ class LivePlotter(QtWidgets.QWidget):
                     self.image_items["diff"].setImage(
                         (diff / span + 1) / 2, levels=(0.0, 1.0))
 
+            source_title = payload.get("source_title")
+            if source_title:
+                self.image_plots["source"].setTitle(source_title)
+
+            # Diagnostic curve (e.g. calibration sweep scores) reuses
+            # the Strehl axes; the next strehls payload reclaims them.
+            curve = payload.get("curve")
+            if curve is not None:
+                x, y = curve
+                self.strehl_curve.setData(np.asarray(x, dtype=float),
+                                          np.asarray(y, dtype=float))
+                self.strehl_plot.setTitle(
+                    payload.get("curve_title", "Score"))
+                self.strehl_plot.enableAutoRange()
+
             strehls = payload.get("strehls")
             n_iter = payload.get("n_iter")
             if strehls is not None:
                 strehls = np.asarray(strehls, dtype=float)
                 valid = ~np.isnan(strehls)
                 iterations = np.arange(strehls.size)[valid]
+                self.strehl_plot.setYRange(0, 1.1)
                 if n_iter:
                     self.strehl_plot.setXRange(0, n_iter - 1)
                 if iterations.size:

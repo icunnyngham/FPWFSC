@@ -127,6 +127,97 @@ def test_plotter_updates_offscreen(qapp):
         plotter.close()
 
 
+class _StubPlotter:
+    closed = False
+
+    def __init__(self):
+        self.payloads = []
+
+    def update(self, payload):
+        self.payloads.append(payload)
+
+
+def _fake_calibration(gui):
+    """Feed the GUI a completed calibration without running one."""
+    yy, xx = np.mgrid[-64:64, -64:64]
+    raw = np.exp(-((xx - 5) ** 2 + (yy + 3) ** 2) / (2 * 4.0 ** 2))
+    ref = np.exp(-(xx[32:96, 32:96] ** 2 + yy[32:96, 32:96] ** 2)
+                 / (2 * 4.0 ** 2))
+    profile = {"image_rot_deg": 5.0, "crop_cx": 64, "crop_cy": 64,
+               "flip_x": False, "flip_y": True, "dm_scale": 1.2,
+               "dm_rot_deg": 0.0}
+    report = {"stage_previews": {"raw": raw}, "reference_psf": ref,
+              "probe_coefficients": np.zeros(10), "corrector": "zernike_dm",
+              "image_rot_error_deg": 0.0, "dm_scale_error_frac": 0.0,
+              "flips_expected_false": True}
+    gui.on_calibration_done(profile, report, None, None)
+    return profile
+
+
+def test_calibration_workbench_fields_and_live_preview(qapp, tmp_path):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        profile = _fake_calibration(gui)
+        # Fields populated from the fitted profile
+        assert gui.calib_fields["image_rot_deg"].text() == "5.0"
+        assert gui.calib_fields["flip_y"].currentText() == "True"
+        assert gui._profile_from_fields()["dm_scale"] == 1.2
+
+        # Hand-edit + live re-render through a stub plotter
+        gui.calib_plotter = _StubPlotter()
+        gui.calib_fields["image_rot_deg"].setText("7.5")
+        gui.calib_fields["crop_cx"].setText("None")  # -> auto center
+        gui.refresh_calibration_preview()
+        parsed = gui._profile_from_fields()
+        assert parsed["image_rot_deg"] == 7.5
+        assert parsed["crop_cx"] is None
+        assert len(gui.calib_plotter.payloads) == 1
+        payload = gui.calib_plotter.payloads[0]
+        assert payload["source"].shape == (64, 64)
+        assert payload["source_title"] == "Calibration: manual edit"
+
+        # Save through a patched name dialog into a scratch registry
+        from PyQt5.QtWidgets import QInputDialog
+        original = QInputDialog.getText
+        QInputDialog.getText = staticmethod(
+            lambda *a, **k: ("workbench_test", True))
+        try:
+            gui.calibrations_dir = tmp_path
+            gui.on_save_calibration()
+        finally:
+            QInputDialog.getText = original
+        assert (tmp_path / "workbench_test.yaml").is_file()
+        names = [gui.calibration_select.itemText(i)
+                 for i in range(gui.calibration_select.count())]
+        assert "workbench_test" in names
+        assert gui.config['MODE']['calibration profile'] == "workbench_test"
+
+        # Selecting the saved profile loads it back into the fields
+        gui.calib_fields["image_rot_deg"].setText("0.0")
+        gui.on_calibration_selected("workbench_test")
+        assert gui._profile_from_fields()["image_rot_deg"] == 7.5
+        assert profile["flip_y"] is True  # untouched original
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_plotter_renders_curve_payload(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_plotter_qt import LivePlotter
+
+    plotter = LivePlotter()
+    try:
+        plotter.update({"curve": ([0, 1, 2], [0.1, 0.9, 0.3]),
+                        "curve_title": "Rotation sweep score"})
+        x, y = plotter.strehl_curve.getData()
+        assert list(x) == [0, 1, 2]
+        assert y[1] == pytest.approx(0.9)
+    finally:
+        plotter.close()
+
+
 def test_gui_constructs_and_round_trips(qapp, tmp_path):
     from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
     from fpwfsc.tokyo_drift.run import run

@@ -111,15 +111,33 @@ def test_sim_guard_refuses_shifts():
 def easy_recovery():
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.calibration.harness import calibrate_bench_sim
-    return calibrate_bench_sim("vampires_f760_10zern", preset="easy",
-                               seed=27)
+    stages = []
+    profile, report = calibrate_bench_sim(
+        "vampires_f760_10zern", preset="easy", seed=27,
+        stage_callback=lambda payload: stages.append(payload))
+    return profile, report, stages
 
 
 def test_recovery_on_easy_preset(easy_recovery):
-    profile, report = easy_recovery
+    profile, report, _stages = easy_recovery
     assert abs(report["image_rot_error_deg"]) < 0.5
     assert abs(report["dm_scale_error_frac"]) < 0.06  # scale-grid quantum
     assert report["flips_expected_false"]
+
+
+def test_stage_callback_streams_fit_progress(easy_recovery):
+    _profile, _report, stages = easy_recovery
+    assert [s["stage"] for s in stages] == [
+        "probe", "rotation", "center", "flips", "scale"]
+    for stage in stages:
+        assert stage["preview"] is not None
+        assert stage["reference"] is not None
+    # Sweep curves ride along for the GUI's score plot
+    assert stages[1]["curve"] is not None      # rotation sweep
+    assert stages[4]["curve"] is not None      # scale grid
+    # Params accumulate across stages
+    assert "image_rot_deg" in stages[1]["params"]
+    assert "dm_scale" in stages[4]["params"]
 
 
 def test_recovery_on_realistic_preset():
@@ -159,7 +177,7 @@ def test_fitted_profile_drives_converging_loop(easy_recovery, tmp_path):
     SIM_INI = str(pipeline_dir / "tokyo_drift_config_sim.ini")
     SPEC = str(pipeline_dir / "tokyo_drift_config.spec")
 
-    profile, _report = easy_recovery
+    profile, _report, _stages = easy_recovery
     path = save_profile("fitted_easy_27", profile, calibrations_dir=tmp_path)
 
     cfg = ConfigObj(SIM_INI)

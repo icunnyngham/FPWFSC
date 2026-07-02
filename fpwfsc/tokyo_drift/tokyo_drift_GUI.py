@@ -12,15 +12,17 @@ filtered to profiles fit against the selected mode). Mode and
 Calibration write into the ``[MODE]`` config section, so a saved .ini
 fully reproduces a GUI-configured run.
 """
+import datetime
 import sys
 import threading
 from pathlib import Path
 
+import numpy as np
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QComboBox, QPushButton,
                              QScrollArea, QFrame, QToolButton, QSizePolicy,
-                             QFileDialog, QGridLayout)
-from PyQt5.QtCore import (Qt, pyqtSlot, QParallelAnimationGroup,
+                             QFileDialog, QGridLayout, QInputDialog)
+from PyQt5.QtCore import (Qt, pyqtSignal, pyqtSlot, QParallelAnimationGroup,
                           QPropertyAnimation, QAbstractAnimation, QTimer,
                           QThread)
 from PyQt5.QtGui import QFont
@@ -41,10 +43,52 @@ except ImportError:
     import tokyo_drift_plotter_qt as pf
 
 from fpwfsc.tokyo_drift import gui_helper as helper
+from fpwfsc.tokyo_drift.calibration.profiles import load_profile, save_profile
+from fpwfsc.tokyo_drift.preprocess import PreprocessImage
 from fpwfsc.tokyo_drift.run import run
 
 # Config sections owned by the top dropdowns rather than the form.
 SELECTOR_SECTIONS = ("MODE",)
+
+# Calibration-parameter fields shown in the collapsible workbench panel.
+CALIB_FLOAT_FIELDS = ("image_rot_deg", "dm_scale", "dm_rot_deg")
+CALIB_INT_FIELDS = ("crop_cx", "crop_cy")       # blank/None -> auto center
+CALIB_BOOL_FIELDS = ("flip_x", "flip_y")
+CALIB_FIELD_ORDER = ("image_rot_deg", "crop_cx", "crop_cy", "flip_x",
+                     "flip_y", "dm_scale", "dm_rot_deg")
+
+
+class CalibrationThread(QThread):
+    """Runs the staged calibration off the GUI thread, streaming stage
+    previews back via signals."""
+    stage_update = pyqtSignal(dict)
+    calibration_done = pyqtSignal(object, object, object, object)
+    calibration_failed = pyqtSignal(str)
+
+    def __init__(self, mode_name, preset, seed):
+        super().__init__()
+        self.mode_name = mode_name
+        self.preset = preset
+        self.seed = seed
+
+    def run(self):
+        try:
+            from fpwfsc.tokyo_drift.calibration.harness import (
+                calibrate_bench_sim,
+            )
+            from fpwfsc.tokyo_drift.sim import BenchSim, IdealSim
+
+            bench = BenchSim.from_mode(self.mode_name, preset=self.preset,
+                                       seed=self.seed)
+            ideal = IdealSim.from_mode(self.mode_name)
+            profile, report = calibrate_bench_sim(
+                self.mode_name, bench=bench, ideal=ideal,
+                stage_callback=self.stage_update.emit)
+            self.calibration_done.emit(profile, report, bench, ideal)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            self.calibration_failed.emit(str(exc))
 
 
 class AlgorithmThread(QThread):
@@ -134,6 +178,18 @@ class TokyoDriftConfigGUI(QWidget):
         self.is_running = False
         self.my_event = threading.Event()
 
+        # Calibration-workbench state (populated by a calibration run)
+        self.calibrations_dir = helper.CALIBRATIONS_DIR
+        self.calib_fields = {}
+        self._updating_fields = False
+        self.calib_plotter = None
+        self.calib_raw = None          # cached raw probe frame
+        self.calib_ref = None          # ideal probe reference
+        self.calib_ideal = None        # IdealSim for dm_scale re-renders
+        self.calib_probe = None
+        self.calib_corrector = None
+        self._last_scale_render = None
+
         self.initUI()
 
     def initUI(self):
@@ -162,9 +218,44 @@ class TokyoDriftConfigGUI(QWidget):
         selector_layout.addWidget(QLabel("Calibration"), 2, 0)
         self.calibration_select = QComboBox()
         self.calibration_select.setFixedHeight(20)
+        self.calibration_select.currentTextChanged.connect(
+            self.on_calibration_selected)
         selector_layout.addWidget(self.calibration_select, 2, 1)
 
+        self.save_calibration_button = QPushButton('Save calibration')
+        self.save_calibration_button.setFixedHeight(20)
+        self.save_calibration_button.clicked.connect(self.on_save_calibration)
+        selector_layout.addWidget(self.save_calibration_button, 2, 2)
+
+        self.calibrate_button = QPushButton('Calibrate (fit on current hardware)')
+        self.calibrate_button.clicked.connect(self.on_calibrate_clicked)
+        selector_layout.addWidget(self.calibrate_button, 3, 0, 1, 3)
+
         main_layout.addLayout(selector_layout)
+
+        # Collapsible calibration-parameter panel: populated by the
+        # staged fit, hand-editable with live panel re-rendering.
+        self.calib_box = CollapsibleBox("Calibration parameters")
+        calib_layout = QGridLayout()
+        calib_layout.setVerticalSpacing(2)
+        calib_layout.setHorizontalSpacing(5)
+        for i, key in enumerate(CALIB_FIELD_ORDER):
+            label = QLabel(key)
+            if key in CALIB_BOOL_FIELDS:
+                widget = QComboBox()
+                widget.addItems(['False', 'True'])
+                widget.currentTextChanged.connect(
+                    self.refresh_calibration_preview)
+            else:
+                widget = QLineEdit("")
+                widget.editingFinished.connect(
+                    self.refresh_calibration_preview)
+            widget.setFixedHeight(20)
+            calib_layout.addWidget(label, i, 0)
+            calib_layout.addWidget(widget, i, 1)
+            self.calib_fields[key] = widget
+        self.calib_box.setContentLayout(calib_layout)
+        main_layout.addWidget(self.calib_box)
 
         # --- Scrollable auto-rendered config form ----------------------
         scroll = QScrollArea(self)
@@ -231,20 +322,186 @@ class TokyoDriftConfigGUI(QWidget):
 
         self.populate_calibration_selector()
 
-    def populate_calibration_selector(self):
+    def populate_calibration_selector(self, select=None):
         """Calibration choices are filtered to the selected mode."""
         mode = self.mode_select.currentText()
-        profiles = ['None'] + helper.list_calibrations(mode_name=mode or None)
+        profiles = ['None'] + helper.list_calibrations(
+            mode_name=mode or None, calibrations_dir=self.calibrations_dir)
 
-        current = str(self.config['MODE']['calibration profile'])
+        current = select or str(self.config['MODE']['calibration profile'])
+        self.calibration_select.blockSignals(True)
         self.calibration_select.clear()
         self.calibration_select.addItems(profiles)
         index = self.calibration_select.findText(current)
         if index >= 0:
             self.calibration_select.setCurrentIndex(index)
+        self.calibration_select.blockSignals(False)
 
     def on_mode_changed(self, _mode_name):
         self.populate_calibration_selector()
+
+    def on_calibration_selected(self, name):
+        """Load a saved profile into the parameter panel (and preview it
+        live if a calibration frame is cached)."""
+        if not name or name == 'None':
+            return
+        try:
+            profile = load_profile(name, calibrations_dir=self.calibrations_dir)
+        except FileNotFoundError as exc:
+            print(f"Error loading calibration {name!r}: {exc}")
+            return
+        self._set_calibration_fields(profile)
+        self.refresh_calibration_preview()
+
+    # --- Calibration workbench -----------------------------------------
+
+    def on_calibrate_clicked(self):
+        if self.hardware_select.currentText() != 'Sim':
+            print("Calibrate: real-hardware calibration is not wired yet; "
+                  "select 'Sim'.")
+            return
+        if self.calib_plotter is None or self.calib_plotter.closed:
+            self.calib_plotter = pf.LivePlotter()
+        self.calibrate_button.setEnabled(False)
+        self.calibrate_button.setText('Calibrating...')
+
+        mode = self.mode_select.currentText()
+        preset = str(self.config['SIMULATION']['bench sim preset'])
+        seed = self.config['SIMULATION']['seed']
+        seed = None if seed in (None, 'None', '') else int(seed)
+
+        self.calibration_thread = CalibrationThread(mode, preset, seed)
+        self.calibration_thread.stage_update.connect(self.on_calibration_stage)
+        self.calibration_thread.calibration_done.connect(self.on_calibration_done)
+        self.calibration_thread.calibration_failed.connect(self.on_calibration_failed)
+        self.calibration_thread.start()
+
+    def on_calibration_stage(self, payload):
+        print(f"Calibration stage: {payload['stage']} -> {payload['params']}")
+        self._set_calibration_fields(payload['params'])
+        if self.calib_plotter is not None and not self.calib_plotter.closed:
+            update = {
+                "source": payload["preview"],
+                "ideal": payload["reference"],
+                "source_title": f"Calibration: {payload['stage']}",
+            }
+            if payload.get("curve") is not None:
+                update["curve"] = payload["curve"]
+                update["curve_title"] = payload.get("curve_title", "Score")
+            self.calib_plotter.update(update)
+
+    def on_calibration_done(self, profile, report, bench, ideal):
+        self.calibrate_button.setEnabled(True)
+        self.calibrate_button.setText('Calibrate (fit on current hardware)')
+        self.calib_raw = report["stage_previews"]["raw"]
+        self.calib_ref = report["reference_psf"]
+        self.calib_ideal = ideal
+        self.calib_probe = report["probe_coefficients"]
+        self.calib_corrector = report["corrector"]
+        self._last_scale_render = None
+        self._set_calibration_fields(profile)
+        print("Calibration complete. Sim-only recovery report: "
+              f"rotation error {report['image_rot_error_deg']:.3f} deg, "
+              f"scale error {report['dm_scale_error_frac']:+.3f}, "
+              f"flips-as-expected {report['flips_expected_false']}.")
+        print("Review/edit the parameters, then 'Save calibration'.")
+
+    def on_calibration_failed(self, message):
+        self.calibrate_button.setEnabled(True)
+        self.calibrate_button.setText('Calibrate (fit on current hardware)')
+        print(f"Calibration failed: {message}")
+
+    def _set_calibration_fields(self, params):
+        self._updating_fields = True
+        try:
+            for key, value in params.items():
+                widget = self.calib_fields.get(key)
+                if widget is None:
+                    continue
+                if key in CALIB_BOOL_FIELDS:
+                    widget.setCurrentText(str(bool(value)))
+                else:
+                    widget.setText("" if value is None else str(value))
+        finally:
+            self._updating_fields = False
+
+    def _profile_from_fields(self):
+        """Parse the parameter panel into a profile dict (ValueError on
+        malformed entries)."""
+        profile = {}
+        for key, widget in self.calib_fields.items():
+            if key in CALIB_BOOL_FIELDS:
+                profile[key] = widget.currentText() == 'True'
+                continue
+            text = widget.text().strip()
+            if key in CALIB_INT_FIELDS:
+                profile[key] = None if text in ("", "None") else int(float(text))
+            else:
+                profile[key] = float(text) if text else 0.0
+        return profile
+
+    def refresh_calibration_preview(self, *_args):
+        """Re-render the alignment panels from the cached calibration
+        frame using the (possibly hand-edited) parameter fields."""
+        if self._updating_fields:
+            return
+        if (self.calib_raw is None or self.calib_plotter is None
+                or self.calib_plotter.closed):
+            return
+        try:
+            profile = self._profile_from_fields()
+        except ValueError as exc:
+            print(f"Calibration preview: bad field value ({exc})")
+            return
+
+        preprocess = PreprocessImage(
+            crop_res=np.asarray(self.calib_ref).shape[0],
+            rot_angle=profile["image_rot_deg"],
+            center_x=profile["crop_cx"], center_y=profile["crop_cy"],
+            flip_horizontal=profile["flip_x"],
+            flip_vertical=profile["flip_y"], verbose=False)
+        frame = preprocess.process(self.calib_raw, normalize=False)
+
+        ideal_img = self.calib_ref
+        # dm_scale edits re-render the ideal probe at the new amplitude
+        # (one cheap ideal-sim sample; no new bench exposure).
+        if (self.calib_ideal is not None
+                and abs(profile["dm_scale"] - 1.0) > 1e-9):
+            if (self._last_scale_render is None
+                    or self._last_scale_render[0] != profile["dm_scale"]):
+                rendered = self.calib_ideal.psf(
+                    {self.calib_corrector:
+                     np.asarray(self.calib_probe) * profile["dm_scale"]})
+                self._last_scale_render = (profile["dm_scale"], rendered)
+            ideal_img = self._last_scale_render[1]
+
+        self.calib_plotter.update({
+            "source": frame,
+            "ideal": ideal_img,
+            "source_title": "Calibration: manual edit",
+        })
+
+    def on_save_calibration(self):
+        try:
+            profile = self._profile_from_fields()
+        except ValueError as exc:
+            print(f"Save calibration: bad field value ({exc})")
+            return
+        mode = self.mode_select.currentText()
+        profile["mode"] = mode
+        profile.setdefault("shift_x", 0)
+        profile.setdefault("shift_y", 0)
+
+        default = f"{mode}_{datetime.date.today().isoformat()}"
+        name, ok = QInputDialog.getText(self, "Save calibration",
+                                        "Profile name:", text=default)
+        if not (ok and name):
+            return
+        path = save_profile(name, profile,
+                            calibrations_dir=self.calibrations_dir)
+        print(f"Calibration saved to {path}")
+        self.populate_calibration_selector(select=name)
+        self.config['MODE']['calibration profile'] = name
 
     def on_hardware_changed(self, selected_hardware):
         try:
