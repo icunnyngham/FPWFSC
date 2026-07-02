@@ -65,6 +65,32 @@ config_info = {
                     "trained NN predictor arrives with the model "
                     "integration milestone.",
             "expert": False
+        },
+        "strehl method": {
+            "help": "Strehl estimator: 'vandam' (van Dam sub-pixel "
+                    "peak + aperture photometry vs the pristine "
+                    "reference) or 'proxy' (peak-to-total flux ratio)",
+            "expert": True
+        }
+    },
+    "CAMERA CALIBRATION": {
+        "background file": {
+            "help": "Path to background (dark) FITS file. Leave empty "
+                    "to estimate from the frame border.",
+            "file": True,
+            "expert": True
+        },
+        "masterflat file": {
+            "help": "Path to master flat FITS file. Leave empty to "
+                    "skip flat fielding.",
+            "file": True,
+            "expert": True
+        },
+        "badpix file": {
+            "help": "Path to bad pixel map FITS file. Leave empty to "
+                    "skip bad pixel correction.",
+            "file": True,
+            "expert": True
         }
     },
     "DM": {
@@ -111,6 +137,18 @@ config_info = {
         "log_path": {
             "help": "Directory for per-run log folders. Empty = "
                     "current directory.",
+            "directory": True,
+            "expert": True
+        },
+        "hitchhiker mode": {
+            "help": "Read frames from a watched directory of FITS "
+                    "files instead of the camera (archive replay / "
+                    "external image generators)",
+            "expert": True
+        },
+        "hitchhiker path": {
+            "help": "Directory the hitchhiker watches for new FITS "
+                    "frames",
             "directory": True,
             "expert": True
         }

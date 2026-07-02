@@ -126,15 +126,29 @@ def test_oracle_loop_early_stops(oracle_result):
     assert oracle_result["loop"]["iterations"] < 15
 
 
-def test_random_walk_loop_does_not_converge(truth_profile):
+def test_random_walk_loop_does_not_converge_and_logs(truth_profile,
+                                                     tmp_path):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 5,
                          "LOOP_SETTINGS.predictor": "random_walk",
-                         "MODE.calibration profile": truth_profile})
+                         "MODE.calibration profile": truth_profile,
+                         "IO.save_log": True,
+                         "IO.log_path": str(tmp_path)})
     result = run("Sim", "Sim", config=cfg, configspec=SPEC)
     strehls = result["loop"]["strehls"]
     assert np.nanmax(strehls) < 0.5
+
+    # Session log written: one timestamped dir with config, per-iter
+    # records, and a summary.
+    sessions = list(tmp_path.glob("tokyo_drift_*"))
+    assert len(sessions) == 1
+    session = sessions[0]
+    assert (session / "config.json").is_file()
+    assert (session / "summary.json").is_file()
+    iter_dirs = sorted(p.name for p in session.glob("iter_*"))
+    assert iter_dirs == [f"iter_{i:03d}" for i in range(5)]
+    assert (session / "iter_000" / "dm_command.fits").is_file()
 
 
 def test_safety_bounds_trip_on_oversized_command(truth_profile):

@@ -67,10 +67,29 @@ not identifiable from a null frame.
 | Section | Purpose |
 |---|---|
 | `[MODE]` | Which trained-model mode to run (a telescope-sim config + NN checkpoint pair under `modes/`), and which saved calibration profile to apply |
-| `[LOOP_SETTINGS]` | Iterations, gain, leak factor, optional Strehl early-stop |
+| `[LOOP_SETTINGS]` | Iterations, gain, leak factor, predictor selection, Strehl estimator (`vandam` / `proxy`), optional Strehl early-stop |
 | `[DM]` | MILK shared-memory channel and command safety bounds |
-| `[SIMULATION]` | Bench-sim misalignment preset and seed (sim mode only) |
-| `[IO]` | Per-iteration logging |
+| `[SIMULATION]` | Bench-sim misalignment preset, seed, injected initial error (sim mode only) |
+| `[CAMERA CALIBRATION]` | Background / masterflat / bad-pixel FITS files (empty fields fall back to border-median background estimation) |
+| `[IO]` | Per-iteration session logging; hitchhiker file-stream mode |
+
+## Session logs
+
+With `save_log = True`, every run writes a timestamped directory under
+`log_path`:
+
+```
+tokyo_drift_<timestamp>/
+├── config.json          validated settings snapshot
+├── iter_NNN/            raw.fits, processed.fits, dm_command.fits,
+│                        metadata.json (strehl, state, prediction, rms)
+└── summary.json         strehl history, final state
+```
+
+Strehl is measured with the van Dam estimator (sub-pixel peak +
+aperture photometry) against a pristine-system reference frame by
+default; `strehl method = proxy` selects the cheaper peak-to-total
+flux ratio.
 
 ## Tests
 

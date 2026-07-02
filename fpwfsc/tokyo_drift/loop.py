@@ -44,7 +44,8 @@ def run_closed_loop(take_image, send_command, predictor, translator,
                     integrator, preprocess, n_iter, *,
                     safety=None, average=1,
                     strehl_fn=None, strehl_early_stop=None,
-                    stop_event=None, plotter=None, ideal_psf=None):
+                    stop_event=None, plotter=None, ideal_psf=None,
+                    iteration_callback=None):
     """Run the NN closed loop.
 
     Parameters
@@ -77,6 +78,11 @@ def run_closed_loop(take_image, send_command, predictor, translator,
         Optional live plotter taking dict payloads.
     ideal_psf
         Reference PSF forwarded to the plotter's "ideal" panel.
+    iteration_callback
+        Optional ``callable(payload_dict)`` invoked once per iteration
+        after the command is sent, with keys ``iteration, raw,
+        processed, prediction, state, command, strehl`` — the session
+        logger's hook.
 
     Returns
     -------
@@ -116,6 +122,17 @@ def run_closed_loop(take_image, send_command, predictor, translator,
         prev_frame = frame
         states[i] = state
         completed = i + 1
+
+        if iteration_callback is not None:
+            iteration_callback({
+                "iteration": i,
+                "raw": raw,
+                "processed": processed,
+                "prediction": prediction,
+                "state": state,
+                "command": command,
+                "strehl": strehls[i],
+            })
 
         if strehl_fn is not None:
             print(f"tokyo_drift iter {i + 1}/{n_iter}: "

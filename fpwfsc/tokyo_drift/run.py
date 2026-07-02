@@ -52,6 +52,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     leak_factor = settings['LOOP_SETTINGS']['leak factor']
     strehl_early_stop = settings['LOOP_SETTINGS']['strehl early stop']
     predictor_name = settings['LOOP_SETTINGS']['predictor']
+    strehl_method = settings['LOOP_SETTINGS']['strehl method']
 
     max_ptv_um = settings['DM']['max peak to valley (um)']
     max_stroke_um = settings['DM']['max actuator stroke (um)']
@@ -59,6 +60,20 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     preset_name = settings['SIMULATION']['bench sim preset']
     seed = settings['SIMULATION']['seed']
     initial_error_rms = settings['SIMULATION']['initial error rms']
+
+    bgds = {
+        'bkgd': sf.load_fits_or_none(
+            settings['CAMERA CALIBRATION']['background file']),
+        'masterflat': sf.load_fits_or_none(
+            settings['CAMERA CALIBRATION']['masterflat file']),
+        'badpix': sf.load_fits_or_none(
+            settings['CAMERA CALIBRATION']['badpix file']),
+    }
+
+    save_log = settings['IO']['save_log']
+    log_path = settings['IO']['log_path']
+    hitchhiker_mode = settings['IO']['hitchhiker mode']
+    hitchhiker_path = settings['IO']['hitchhiker path']
 
     print(f"tokyo_drift: config OK - mode '{mode_name}', "
           f"{n_iter} iterations requested.")
@@ -125,11 +140,45 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         flip_vertical=profile["flip_y"],
     )
 
-    # Reference peak-flux ratio from the pristine bench (before the
-    # hidden error is injected) - the denominator of the Strehl proxy.
-    reference_frame = preprocess.process(bench.take_image_noiseless(),
+    # Frame reduction (background / flat / bad pixels), matching the
+    # other pipelines' reduce-before-use convention. With no
+    # calibration files configured, equalize_image falls back to
+    # border-median background estimation.
+    def reduce(frame):
+        for name, arr in bgds.items():
+            if arr is not None and arr.shape != frame.shape:
+                raise ValueError(
+                    f"calibration file {name!r} has shape {arr.shape} but "
+                    f"the camera frame is {frame.shape}")
+        return sf.equalize_image(frame, **bgds)
+
+    if hitchhiker_mode:
+        from ..common import fake_hardware as fhw
+        hitch = fhw.Hitchhiker(imagedir=hitchhiker_path)
+        print(f"tokyo_drift: hitchhiker mode - reading frames from "
+              f"{hitchhiker_path}")
+
+        def take_image(average=1):
+            return reduce(hitch.wait_for_next_image())
+    else:
+        def take_image(average=1):
+            return reduce(Camera.take_image(average=average))
+
+    # Reference frame from the pristine bench (before the hidden error
+    # is injected): the diffraction-limited PSF of THIS optical system,
+    # the denominator of both Strehl estimates.
+    reference_frame = preprocess.process(reduce(bench.take_image_noiseless()),
                                          normalize=False)
-    reference_ratio = peak_flux_ratio(reference_frame)
+    if strehl_method == 'vandam':
+        from ..common import vandamstrehl as vd
+
+        def strehl_fn(frame):
+            return float(vd.strehl(frame, reference_frame))
+    else:
+        reference_ratio = peak_flux_ratio(reference_frame)
+
+        def strehl_fn(frame):
+            return peak_flux_ratio(frame) / reference_ratio
 
     # Inject the hidden wavefront error the loop must correct ("the
     # DM's flat isn't flat"), expressed in the modal basis via a
@@ -151,16 +200,37 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     safety = DMSafetyBounds(max_ptv_um=max_ptv_um,
                             max_stroke_um=max_stroke_um)
 
+    logger = None
+    iteration_callback = None
+    if save_log:
+        from .session_log import SessionLogger
+        logger = SessionLogger(log_path, settings=settings)
+        print(f"tokyo_drift: logging session to {logger.session_dir}")
+
+        def iteration_callback(payload):
+            logger.save_iteration(
+                payload["iteration"],
+                strehl=payload["strehl"],
+                state=payload["state"],
+                prediction=payload["prediction"],
+                dm_command=payload["command"],
+                raw=payload["raw"],
+                processed=payload["processed"],
+            )
+
     result = run_closed_loop(
-        Camera.take_image, AOsystem.set_dm_data,
+        take_image, AOsystem.set_dm_data,
         predictor, translator, integrator, preprocess, n_iter,
         safety=safety,
-        strehl_fn=lambda frame: peak_flux_ratio(frame) / reference_ratio,
+        strehl_fn=strehl_fn,
         strehl_early_stop=strehl_early_stop,
         stop_event=my_event,
         plotter=plotter,
         ideal_psf=ideal.reference_psf,
+        iteration_callback=iteration_callback,
     )
+    if logger is not None:
+        logger.finalize(result)
     print(f"tokyo_drift: loop finished after {result['iterations']} "
           f"iterations.")
     return {"settings": settings, "loop": result, "truth": truth,

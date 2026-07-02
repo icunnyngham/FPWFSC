@@ -9,6 +9,7 @@
     leak factor       = float(min=0, max=1)
     strehl early stop = float_or_none(default=None)
     predictor         = option('oracle', 'random_walk', default='oracle')
+    strehl method     = option('vandam', 'proxy', default='vandam')
 
 [DM]
     dm channel               = string(default='dm00disp04')
@@ -20,6 +21,13 @@
     seed              = integer_or_none(default=None)
     initial error rms = float(min=0, default=0.15)
 
+[CAMERA CALIBRATION]
+    background file = string(default='')
+    masterflat file = string(default='')
+    badpix file     = string(default='')
+
 [IO]
-    save_log = boolean(default=False)
-    log_path = string(default='')
+    save_log        = boolean(default=False)
+    log_path        = string(default='')
+    hitchhiker mode = boolean(default=False)
+    hitchhiker path = string(default='')
