@@ -21,6 +21,11 @@ from .mode_registry import (  # noqa: F401 — re-exported for GUI use
 
 valid_instruments = ['Sim', 'Vampires']
 
+
+def _bench_sim_presets():
+    from .sim.bench_sim import list_presets
+    return list_presets()
+
 config_info = {
     "MODE": {
         "mode name": {
@@ -113,7 +118,10 @@ config_info = {
     "SIMULATION": {
         "bench sim preset": {
             "help": "Misalignment-injection preset for the simulated "
-                    "bench (easy, realistic_vampires, stress_test, ...)",
+                    "bench: the priors for the camera rotation / crop "
+                    "offset / DM rotation / scale / flips that "
+                    "calibration must recover",
+            "choices": _bench_sim_presets,
             "expert": False
         },
         "seed": {
@@ -171,6 +179,16 @@ def load_instruments(instrumentname, camargs={}, aoargs={}):
 def get_help_message(section, key):
     """Retrieve the help message for a given section and key."""
     return config_info.get(section, {}).get(key, {}).get("help", "No help available")
+
+
+def get_choices(section, key):
+    """Dropdown choices for a field, or None. A ``choices`` entry may be
+    a list or a callable (evaluated at GUI build time, so registries
+    scanned from disk stay fresh)."""
+    choices = config_info.get(section, {}).get(key, {}).get("choices")
+    if choices is None:
+        return None
+    return list(choices()) if callable(choices) else list(choices)
 
 
 def is_expert_option(section, key):

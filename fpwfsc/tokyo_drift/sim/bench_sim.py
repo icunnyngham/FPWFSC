@@ -47,6 +47,11 @@ DM_NOMINAL_SCALE = 1.0e-6
 MIN_PUPIL_EXTENT = 8.65
 
 
+def list_presets(presets_dir=PRESETS_DIR):
+    """Names of the available mangling-prior presets."""
+    return sorted(p.stem for p in Path(presets_dir).glob("*.yaml"))
+
+
 def load_preset(name, presets_dir=PRESETS_DIR):
     """Load a mangling-prior preset by name."""
     import yaml

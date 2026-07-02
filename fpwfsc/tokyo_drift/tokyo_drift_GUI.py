@@ -58,6 +58,20 @@ CALIB_FIELD_ORDER = ("image_rot_deg", "crop_cx", "crop_cy", "flip_x",
                      "flip_y", "dm_scale", "dm_rot_deg")
 
 
+def diff_rms(frame, reference):
+    """RMS of the peak-normalized difference image — the per-stage
+    calibration-progress metric. None if shapes don't match (e.g. the
+    raw probe frame before rotation/cropping)."""
+    frame = np.asarray(frame, dtype=float)
+    reference = np.asarray(reference, dtype=float)
+    if frame.shape != reference.shape:
+        return None
+    if frame.max() <= 0 or reference.max() <= 0:
+        return None
+    residual = frame / frame.max() - reference / reference.max()
+    return float(np.sqrt(np.mean(residual ** 2)))
+
+
 class CalibrationThread(QThread):
     """Runs the staged calibration off the GUI thread, streaming stage
     previews back via signals."""
@@ -189,6 +203,7 @@ class TokyoDriftConfigGUI(QWidget):
         self.calib_probe = None
         self.calib_corrector = None
         self._last_scale_render = None
+        self._calib_progress = {"x": [], "y": [], "stage_marks": []}
 
         self.initUI()
 
@@ -364,6 +379,7 @@ class TokyoDriftConfigGUI(QWidget):
             self.calib_plotter = pf.LivePlotter()
         self.calibrate_button.setEnabled(False)
         self.calibrate_button.setText('Calibrating...')
+        self._calib_progress = {"x": [], "y": [], "stage_marks": []}
 
         mode = self.mode_select.currentText()
         preset = str(self.config['SIMULATION']['bench sim preset'])
@@ -379,16 +395,36 @@ class TokyoDriftConfigGUI(QWidget):
     def on_calibration_stage(self, payload):
         print(f"Calibration stage: {payload['stage']} -> {payload['params']}")
         self._set_calibration_fields(payload['params'])
-        if self.calib_plotter is not None and not self.calib_plotter.closed:
-            update = {
-                "source": payload["preview"],
-                "ideal": payload["reference"],
-                "source_title": f"Calibration: {payload['stage']}",
-            }
-            if payload.get("curve") is not None:
-                update["curve"] = payload["curve"]
-                update["curve_title"] = payload.get("curve_title", "Score")
-            self.calib_plotter.update(update)
+        if self.calib_plotter is None or self.calib_plotter.closed:
+            return
+
+        title = f"Calibration: {payload['stage']}"
+        rms = diff_rms(payload["preview"], payload["reference"])
+        if rms is not None:
+            # One point per stage; dashed annotated marker at each.
+            step = len(self._calib_progress["x"])
+            self._calib_progress["x"].append(step)
+            self._calib_progress["y"].append(rms)
+            self._calib_progress["stage_marks"].append(
+                (step, payload["stage"]))
+            title += f" (RMS diff {rms:.4f})"
+
+        update = {
+            "source": payload["preview"],
+            "ideal": payload["reference"],
+            "source_title": title,
+            "progress": {
+                "x": list(self._calib_progress["x"]),
+                "y": list(self._calib_progress["y"]),
+                "stage_marks": list(self._calib_progress["stage_marks"]),
+                "title": "Calibration progress",
+                "ylabel": "RMS(diff)",
+            },
+        }
+        if payload.get("curve") is not None:
+            update["curve"] = payload["curve"]
+            update["curve_title"] = payload.get("curve_title", "Score")
+        self.calib_plotter.update(update)
 
     def on_calibration_done(self, profile, report, bench, ideal):
         self.calibrate_button.setEnabled(True)
@@ -475,10 +511,14 @@ class TokyoDriftConfigGUI(QWidget):
                 self._last_scale_render = (profile["dm_scale"], rendered)
             ideal_img = self._last_scale_render[1]
 
+        title = "Calibration: manual edit"
+        rms = diff_rms(frame, ideal_img)
+        if rms is not None:
+            title += f" (RMS diff {rms:.4f})"
         self.calib_plotter.update({
             "source": frame,
             "ideal": ideal_img,
-            "source_title": "Calibration: manual edit",
+            "source_title": title,
         })
 
     def on_save_calibration(self):
@@ -784,6 +824,16 @@ class TokyoDriftConfigGUI(QWidget):
             widget.text_field = text_field
 
             return widget
+
+        # Registry-backed dropdowns (e.g. bench-sim presets) declared
+        # via gui_helper config_info "choices"
+        choices = helper.get_choices(section, key)
+        if choices:
+            input_widget = QComboBox()
+            input_widget.addItems([str(c) for c in choices])
+            input_widget.setCurrentText(str(value).strip())
+            input_widget.setFixedHeight(20)
+            return input_widget
 
         spec = self.get_spec_for_key(f"{section}.{key}")
 

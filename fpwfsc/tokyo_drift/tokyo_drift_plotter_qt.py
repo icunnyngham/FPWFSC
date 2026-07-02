@@ -18,8 +18,12 @@ import sys
 import numpy as np
 import matplotlib
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import QTimer, pyqtSignal, pyqtSlot, QObject
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QObject
 import pyqtgraph as pg
+
+# Displayed dynamic range of log-scaled PSF panels, in decades below
+# the peak (matches the bench notebooks' LogNorm(vmin=1e-4, vmax=1)).
+LOG_DECADES = 4.0
 
 
 def inferno_lut(nsteps=256):
@@ -40,20 +44,24 @@ def bwr_lut(nsteps=256):
     return (cmap(np.linspace(0, 1, nsteps))[:, :3] * 255).astype(np.uint8)
 
 
-def log_display(image, floor=1e-8):
-    """Normalize an intensity image for log-scale display (LogNorm-like).
+def log_display(image, vmin_decades=LOG_DECADES):
+    """Peak-normalized log10 image for LogNorm-style display.
 
-    Returns log10(|image|/max + floor) rescaled to [0, 1].
+    Returns ``log10(|image| / max)`` clipped to ``[-vmin_decades, 0]``
+    — physical units (decades below peak), so a colorbar over these
+    values is directly readable.
     """
     image = np.asarray(image, dtype=float)
     mx = np.max(np.abs(image))
     if mx <= 0:
-        return np.zeros_like(image)
-    logim = np.log10(np.abs(image) / mx + floor)
-    lo, hi = logim.min(), logim.max()
-    if hi <= lo:
-        return np.zeros_like(image)
-    return (logim - lo) / (hi - lo)
+        return np.full_like(image, -vmin_decades)
+    logim = np.log10(np.abs(image) / mx + 10.0 ** (-vmin_decades - 2))
+    return np.clip(logim, -vmin_decades, 0.0)
+
+
+def _pg_colormap(lut):
+    """Wrap a (N, 3) uint8 LUT as a pyqtgraph ColorMap."""
+    return pg.ColorMap(np.linspace(0.0, 1.0, len(lut)), lut)
 
 
 class PlotterSignals(QObject):
@@ -90,12 +98,16 @@ class LivePlotter(QtWidgets.QWidget):
         layout = QtWidgets.QGridLayout()
         self.setLayout(layout)
 
-        self._psf_lut = inferno_lut()
-        self._diff_lut = bwr_lut()
+        self._psf_cmap = _pg_colormap(inferno_lut())
+        self._diff_cmap = _pg_colormap(bwr_lut())
 
         # --- Top row: alignment view (source / ideal / difference) ----
+        # Source/Ideal display log10(rel. intensity) over LOG_DECADES
+        # decades; Difference displays raw fraction-of-peak residuals on
+        # a symmetric scale. Every panel carries a labeled colorbar.
         self.image_plots = {}
         self.image_items = {}
+        self.color_bars = {}
         self._raw_images = {}
         for col, (key, title) in enumerate(
                 [("source", "Source (calibrated)"),
@@ -107,12 +119,20 @@ class LivePlotter(QtWidgets.QWidget):
             plot.hideAxis('left')
             plot.hideAxis('bottom')
             img = pg.ImageItem()
-            img.setLookupTable(self._diff_lut if key == "diff"
-                               else self._psf_lut)
             plot.addItem(img)
+            if key == "diff":
+                bar = pg.ColorBarItem(colorMap=self._diff_cmap,
+                                      values=(-1e-3, 1e-3), width=15,
+                                      label="fraction of peak")
+            else:
+                bar = pg.ColorBarItem(colorMap=self._psf_cmap,
+                                      values=(-LOG_DECADES, 0.0), width=15,
+                                      label="log10 relative intensity")
+            bar.setImageItem(img, insert_in=plot.getPlotItem())
             layout.addWidget(plot, 0, col)
             self.image_plots[key] = plot
             self.image_items[key] = img
+            self.color_bars[key] = bar
             self._raw_images[key] = None
 
         # --- Bottom row: Strehl history + mode coefficients -----------
@@ -132,7 +152,13 @@ class LivePlotter(QtWidgets.QWidget):
         self.coeff_plot.setLabel('bottom', 'Mode index')
         self.coeff_plot.showGrid(x=True, y=True)
         self.coeff_bars = None
+        # Calibration sweep curves (rotation / scale) borrow this panel
+        self.sweep_curve = pg.PlotDataItem(pen=pg.mkPen('c', width=2))
+        self.coeff_plot.addItem(self.sweep_curve)
         layout.addWidget(self.coeff_plot, 1, 1, 1, 2)
+
+        # Stage-annotation items on the history axes (calibration mode)
+        self._stage_marks = []
 
         # Pixel-value readout on hover over any image panel
         self.pixel_label = QtWidgets.QLabel("")
@@ -169,6 +195,11 @@ class LivePlotter(QtWidgets.QWidget):
         elif data.ndim > 2:
             data = data[..., 0]
         return data.astype(float)
+
+    def _clear_stage_marks(self):
+        for item in self._stage_marks:
+            self.strehl_plot.removeItem(item)
+        self._stage_marks = []
 
     def _on_mouse(self, evt, key):
         raw = self._raw_images.get(key)
@@ -219,41 +250,75 @@ class LivePlotter(QtWidgets.QWidget):
             if source is not None:
                 source = self._ensure_2d(source).T
                 self._raw_images["source"] = source
-                self.image_items["source"].setImage(
-                    log_display(source), levels=(0.0, 1.0))
+                self.image_items["source"].setImage(log_display(source),
+                                                    autoLevels=False)
+                self.color_bars["source"].setLevels((-LOG_DECADES, 0.0))
             if ideal is not None:
                 ideal = self._ensure_2d(ideal).T
                 self._raw_images["ideal"] = ideal
-                self.image_items["ideal"].setImage(
-                    log_display(ideal), levels=(0.0, 1.0))
+                self.image_items["ideal"].setImage(log_display(ideal),
+                                                   autoLevels=False)
+                self.color_bars["ideal"].setLevels((-LOG_DECADES, 0.0))
 
-            # Difference of the peak-normalized linear images, symmetric
-            # linear scale so blue/red are equal-magnitude residuals.
+            # Difference of the peak-normalized linear images, displayed
+            # in physical units (fraction of peak) on a symmetric scale
+            # — the colorbar tells you how big the residual really is.
             src, ide = self._raw_images["source"], self._raw_images["ideal"]
             if (src is not None and ide is not None
                     and src.shape == ide.shape
                     and src.max() > 0 and ide.max() > 0):
                 diff = src / src.max() - ide / ide.max()
                 self._raw_images["diff"] = diff
-                span = np.max(np.abs(diff))
-                if span > 0:
-                    self.image_items["diff"].setImage(
-                        (diff / span + 1) / 2, levels=(0.0, 1.0))
+                span = float(np.max(np.abs(diff))) or 1e-12
+                self.image_items["diff"].setImage(diff, autoLevels=False)
+                self.color_bars["diff"].setLevels((-span, span))
 
             source_title = payload.get("source_title")
             if source_title:
                 self.image_plots["source"].setTitle(source_title)
 
-            # Diagnostic curve (e.g. calibration sweep scores) reuses
-            # the Strehl axes; the next strehls payload reclaims them.
+            # Calibration sweep curve (rotation / scale) borrows the
+            # mode-coefficients panel; the next mode_coeffs payload
+            # reclaims it.
             curve = payload.get("curve")
             if curve is not None:
+                if self.coeff_bars is not None:
+                    self.coeff_plot.removeItem(self.coeff_bars)
+                    self.coeff_bars = None
                 x, y = curve
-                self.strehl_curve.setData(np.asarray(x, dtype=float),
-                                          np.asarray(y, dtype=float))
+                self.sweep_curve.setData(np.asarray(x, dtype=float),
+                                         np.asarray(y, dtype=float))
+                self.coeff_plot.setTitle(payload.get("curve_title", "Score"))
+                self.coeff_plot.setLabel('left', 'score')
+                self.coeff_plot.setLabel('bottom', 'swept value')
+                self.coeff_plot.enableAutoRange()
+
+            # Calibration progress (RMS of the diff image per stage)
+            # borrows the Strehl axes, with dashed stage annotations;
+            # the next strehls payload reclaims them.
+            progress = payload.get("progress")
+            if progress is not None:
+                self._clear_stage_marks()
+                x = np.asarray(progress.get("x", []), dtype=float)
+                y = np.asarray(progress.get("y", []), dtype=float)
+                self.strehl_curve.setData(x, y, symbol='o')
                 self.strehl_plot.setTitle(
-                    payload.get("curve_title", "Score"))
+                    progress.get("title", "Calibration progress"))
+                self.strehl_plot.setLabel(
+                    'left', progress.get("ylabel", "RMS(diff)"))
+                self.strehl_plot.setLabel('bottom', 'calibration step')
                 self.strehl_plot.enableAutoRange()
+                ymax = float(np.max(y)) if y.size else 1.0
+                for mark_x, label in progress.get("stage_marks", []):
+                    line = pg.InfiniteLine(
+                        pos=float(mark_x), angle=90,
+                        pen=pg.mkPen((180, 180, 180), style=Qt.DashLine))
+                    self.strehl_plot.addItem(line)
+                    text = pg.TextItem(str(label), color=(220, 220, 220),
+                                       anchor=(0, 1))
+                    text.setPos(float(mark_x), ymax)
+                    self.strehl_plot.addItem(text)
+                    self._stage_marks.extend([line, text])
 
             strehls = payload.get("strehls")
             n_iter = payload.get("n_iter")
@@ -261,17 +326,25 @@ class LivePlotter(QtWidgets.QWidget):
                 strehls = np.asarray(strehls, dtype=float)
                 valid = ~np.isnan(strehls)
                 iterations = np.arange(strehls.size)[valid]
+                self._clear_stage_marks()
+                self.strehl_plot.setLabel('left', 'Strehl')
+                self.strehl_plot.setLabel('bottom', 'Iteration')
                 self.strehl_plot.setYRange(0, 1.1)
                 if n_iter:
                     self.strehl_plot.setXRange(0, n_iter - 1)
                 if iterations.size:
-                    self.strehl_curve.setData(iterations, strehls[valid])
+                    self.strehl_curve.setData(iterations, strehls[valid],
+                                              symbol=None)
                     self.strehl_plot.setTitle(
                         f"Strehl Ratio = {strehls[valid][-1]:.3f}")
 
             coeffs = payload.get("mode_coeffs")
             if coeffs is not None:
                 coeffs = np.asarray(coeffs, dtype=float).ravel()
+                self.sweep_curve.setData([], [])
+                self.coeff_plot.setTitle("Mode Coefficients")
+                self.coeff_plot.setLabel('left', 'Amplitude')
+                self.coeff_plot.setLabel('bottom', 'Mode index')
                 if self.coeff_bars is not None:
                     self.coeff_plot.removeItem(self.coeff_bars)
                 self.coeff_bars = pg.BarGraphItem(

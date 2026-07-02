@@ -51,20 +51,32 @@ def test_list_calibrations_filters_by_mode(tmp_path):
 
 # --- Plotter display math (no Qt event loop needed) -------------------
 
-def test_log_display_normalizes_to_unit_range():
-    from fpwfsc.tokyo_drift.tokyo_drift_plotter_qt import log_display
+def test_log_display_gives_decades_below_peak():
+    from fpwfsc.tokyo_drift.tokyo_drift_plotter_qt import (
+        LOG_DECADES, log_display)
     image = np.abs(np.random.default_rng(0).normal(size=(32, 32))) + 1e-3
     disp = log_display(image)
-    assert disp.min() == pytest.approx(0.0)
-    assert disp.max() == pytest.approx(1.0)
+    # Physical units: 0 at the peak, clipped LOG_DECADES below it —
+    # a colorbar over these values reads directly as log10 contrast.
+    assert disp.max() == pytest.approx(0.0, abs=1e-6)
+    assert disp.min() >= -LOG_DECADES
     # Log scaling is monotonic: brightest pixel stays brightest.
     assert np.unravel_index(disp.argmax(), disp.shape) == \
         np.unravel_index(image.argmax(), image.shape)
 
 
 def test_log_display_handles_empty_image():
-    from fpwfsc.tokyo_drift.tokyo_drift_plotter_qt import log_display
-    assert not np.any(log_display(np.zeros((8, 8))))
+    from fpwfsc.tokyo_drift.tokyo_drift_plotter_qt import (
+        LOG_DECADES, log_display)
+    assert np.all(log_display(np.zeros((8, 8))) == -LOG_DECADES)
+
+
+def test_bench_preset_field_is_a_dropdown():
+    from fpwfsc.tokyo_drift import gui_helper as gh
+    choices = gh.get_choices("SIMULATION", "bench sim preset")
+    assert set(choices) >= {"easy", "realistic_vampires", "stress_test",
+                            "preset_1"}
+    assert gh.get_choices("SIMULATION", "seed") is None
 
 
 def test_inferno_lut_shape():
@@ -176,7 +188,8 @@ def test_calibration_workbench_fields_and_live_preview(qapp, tmp_path):
         assert len(gui.calib_plotter.payloads) == 1
         payload = gui.calib_plotter.payloads[0]
         assert payload["source"].shape == (64, 64)
-        assert payload["source_title"] == "Calibration: manual edit"
+        assert payload["source_title"].startswith("Calibration: manual edit")
+        assert "RMS diff" in payload["source_title"]
 
         # Save through a patched name dialog into a scratch registry
         from PyQt5.QtWidgets import QInputDialog
@@ -204,18 +217,105 @@ def test_calibration_workbench_fields_and_live_preview(qapp, tmp_path):
         gui.close()
 
 
-def test_plotter_renders_curve_payload(qapp):
+def test_plotter_renders_curve_payload_on_coeff_panel(qapp):
     from fpwfsc.tokyo_drift.tokyo_drift_plotter_qt import LivePlotter
 
     plotter = LivePlotter()
     try:
         plotter.update({"curve": ([0, 1, 2], [0.1, 0.9, 0.3]),
                         "curve_title": "Rotation sweep score"})
-        x, y = plotter.strehl_curve.getData()
+        x, y = plotter.sweep_curve.getData()
         assert list(x) == [0, 1, 2]
         assert y[1] == pytest.approx(0.9)
     finally:
         plotter.close()
+
+
+def test_plotter_renders_progress_with_stage_marks(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_plotter_qt import LivePlotter
+
+    plotter = LivePlotter()
+    try:
+        plotter.update({"progress": {
+            "x": [0, 1, 2], "y": [0.3, 0.1, 0.05],
+            "stage_marks": [(0, "rotation"), (1, "center"), (2, "flips")],
+            "ylabel": "RMS(diff)"}})
+        x, y = plotter.strehl_curve.getData()
+        assert list(x) == [0, 1, 2]
+        # One dashed line + one text label per stage
+        assert len(plotter._stage_marks) == 6
+        # A loop strehls payload reclaims the axes and clears the marks
+        plotter.update({"n_iter": 5, "strehls": np.array([0.5, np.nan,
+                                                          np.nan, np.nan,
+                                                          np.nan])})
+        assert plotter._stage_marks == []
+    finally:
+        plotter.close()
+
+
+def test_plotter_diff_colorbar_tracks_residual_scale(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_plotter_qt import LivePlotter
+
+    plotter = LivePlotter()
+    try:
+        yy, xx = np.mgrid[-16:16, -16:16]
+        ideal = np.exp(-(xx**2 + yy**2) / (2 * 3.0**2))
+        source = np.roll(ideal, 2, axis=0)
+        plotter.update({"source": source, "ideal": ideal})
+        lo, hi = plotter.color_bars["diff"].levels()
+        span = float(np.max(np.abs(plotter._raw_images["diff"])))
+        assert hi == pytest.approx(span)
+        assert lo == pytest.approx(-span)
+    finally:
+        plotter.close()
+
+
+def test_gui_stage_handler_builds_progress(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        gui.calib_plotter = _StubPlotter()
+        ref = np.exp(-(np.mgrid[-32:32, -32:32][0]**2
+                       + np.mgrid[-32:32, -32:32][1]**2) / 18.0)
+        # Raw probe stage: preview shape mismatches the reference ->
+        # no progress point yet
+        gui.on_calibration_stage({"stage": "probe", "params": {},
+                                  "preview": np.zeros((128, 128)),
+                                  "reference": ref, "curve": None})
+        assert gui._calib_progress["x"] == []
+        # Rotation stage: matched shapes -> a point + annotated mark
+        gui.on_calibration_stage({
+            "stage": "rotation", "params": {"image_rot_deg": 12.0},
+            "preview": np.roll(ref, 3, axis=1), "reference": ref,
+            "curve": ([0, 1], [0.1, 0.9]),
+            "curve_title": "Rotation sweep score"})
+        assert gui._calib_progress["x"] == [0]
+        assert gui._calib_progress["stage_marks"] == [(0, "rotation")]
+        payload = gui.calib_plotter.payloads[-1]
+        assert payload["progress"]["y"][0] > 0
+        assert "RMS diff" in payload["source_title"]
+        assert gui.calib_fields["image_rot_deg"].text() == "12.0"
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_bench_preset_widget_is_dropdown(qapp):
+    from PyQt5.QtWidgets import QComboBox
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        widget = gui.create_input_widget("SIMULATION", "bench sim preset",
+                                         "easy")
+        assert isinstance(widget, QComboBox)
+        items = [widget.itemText(i) for i in range(widget.count())]
+        assert "stress_test" in items
+        assert widget.currentText() == "easy"
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
 
 
 def test_gui_constructs_and_round_trips(qapp, tmp_path):
