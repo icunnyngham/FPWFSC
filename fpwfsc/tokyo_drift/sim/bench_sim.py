@@ -236,6 +236,7 @@ class BenchSim:
         self.read_noise = float(read_noise)
         n = DM_NUM_ACTUATORS
         self._dm_command = np.zeros((n, n))
+        self._error_command = np.zeros((n, n))
 
     @classmethod
     def from_mode(cls, mode_name, **kwargs):
@@ -247,18 +248,33 @@ class BenchSim:
     def set_dm_data(self, dm_microns):
         """Accept a raw 50x50 command in microns of surface — exactly
         what ``SCEXAO.set_dm_data`` ships to the shared-memory stream."""
+        self._dm_command = self._validated(dm_microns)
+
+    def set_error_command(self, dm_microns):
+        """Inject a hidden static surface error (microns), added to
+        every user command — "the DM's flat isn't flat". This is the
+        aberration a closed loop must find and cancel; the loop's
+        converged state is the negative of this command. Sim-only side
+        channel: nothing on the real bench corresponds to it."""
+        self._error_command = self._validated(dm_microns)
+
+    @staticmethod
+    def _validated(dm_microns):
         cmd = np.asarray(dm_microns, dtype=float)
         n = DM_NUM_ACTUATORS
         if cmd.shape != (n, n):
             raise ValueError(f"expected ({n}, {n}) DM command, got {cmd.shape}")
-        self._dm_command = cmd.copy()
+        return cmd.copy()
+
+    def _render(self):
+        effective = self._dm_command + self._error_command
+        return np.squeeze(np.asarray(
+            self.sim.sample(actuations={"bench_dm": effective})["images"]["psf"]))
 
     def take_image(self, average=1):
         """Render the current optical state and return a mangled,
         noisy detector frame (averaged over ``average`` noise draws)."""
-        rendered = np.squeeze(np.asarray(
-            self.sim.sample(
-                actuations={"bench_dm": self._dm_command})["images"]["psf"]))
+        rendered = self._render()
         total_photons = (self.int_phot_flux * self.aperture_area
                          if self.aperture_area > 0 else None)
         frames = [
@@ -275,9 +291,7 @@ class BenchSim:
 
     def take_image_noiseless(self):
         """Mangled but noise-free frame (diagnostics / calibration dev)."""
-        rendered = np.squeeze(np.asarray(
-            self.sim.sample(
-                actuations={"bench_dm": self._dm_command})["images"]["psf"]))
+        rendered = self._render()
         return mangle_frame(rendered,
                             self.truth["image_rot_deg"],
                             self.truth["crop_dx"], self.truth["crop_dy"],

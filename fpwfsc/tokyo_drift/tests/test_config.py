@@ -44,9 +44,14 @@ def test_invalid_config_raises(tmp_path):
 
 
 def test_run_sim_returns_validated_settings():
-    settings = run("Sim", "Sim", config=SIM_INI, configspec=SPEC)
+    stop = threading.Event()
+    stop.set()  # validate the config contract without building backends
+    result = run("Sim", "Sim", config=SIM_INI, configspec=SPEC,
+                 my_event=stop)
+    settings = result["settings"]
     assert settings["MODE"]["mode name"] == "vampires_f760_10zern"
     assert settings["LOOP_SETTINGS"]["N iter"] >= 1
+    assert result["loop"] is None
 
 
 def test_run_real_hardware_not_implemented():
@@ -57,14 +62,14 @@ def test_run_real_hardware_not_implemented():
 def test_run_respects_stop_event():
     stop = threading.Event()
     stop.set()
-    settings = run("Sim", "Sim", config=SIM_INI, configspec=SPEC,
-                   my_event=stop)
-    assert settings is not None
+    result = run("Sim", "Sim", config=SIM_INI, configspec=SPEC,
+                 my_event=stop)
+    assert result["loop"] is None
 
 
-def test_module_entry_point_runs_clean():
+def test_module_entry_point_check_config():
     result = subprocess.run(
-        [sys.executable, "-m", "fpwfsc.tokyo_drift.run"],
+        [sys.executable, "-m", "fpwfsc.tokyo_drift.run", "--check-config"],
         capture_output=True, text=True, timeout=120,
     )
     assert result.returncode == 0, result.stderr

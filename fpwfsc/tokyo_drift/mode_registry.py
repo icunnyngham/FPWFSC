@@ -67,6 +67,22 @@ def ts2_config_path(mode_name, modes_dir=MODES_DIR):
     return path
 
 
+def load_ts2_config(mode_name, modes_dir=MODES_DIR):
+    """The mode's TS2 YAML as a dict (for parameter introspection —
+    e.g. the mode count of the training corrector)."""
+    import yaml
+    with open(ts2_config_path(mode_name, modes_dir)) as f:
+        return yaml.safe_load(f)
+
+
+def mode_n_modes(mode_name, modes_dir=MODES_DIR):
+    """Number of controlled modes: read from the first corrector in the
+    mode's TS2 corrector chain."""
+    cfg = load_ts2_config(mode_name, modes_dir)
+    first = cfg["corrector_chain"][0]
+    return int(cfg["correctors"][first]["n_modes"])
+
+
 def load_manifest(mode_name, modes_dir=MODES_DIR):
     """The mode's manifest.yaml as a dict ({} if absent)."""
     path = mode_dir(mode_name, modes_dir) / "manifest.yaml"

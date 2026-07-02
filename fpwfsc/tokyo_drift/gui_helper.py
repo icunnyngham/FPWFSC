@@ -57,6 +57,14 @@ config_info = {
             "help": "Stop the loop early once the measured Strehl "
                     "exceeds this value. None disables early stop.",
             "expert": True
+        },
+        "predictor": {
+            "help": "Wavefront-error predictor: 'oracle' (sim-only, "
+                    "reads injected truth - loop must converge) or "
+                    "'random_walk' (noise - loop must diverge). The "
+                    "trained NN predictor arrives with the model "
+                    "integration milestone.",
+            "expert": False
         }
     },
     "DM": {
@@ -85,6 +93,12 @@ config_info = {
         "seed": {
             "help": "Random seed for the simulated bench. None = "
                     "fresh randomness each run.",
+            "expert": True
+        },
+        "initial error rms": {
+            "help": "Per-mode RMS of the hidden wavefront error "
+                    "injected into the simulated bench - the "
+                    "aberration the loop must correct.",
             "expert": True
         }
     },

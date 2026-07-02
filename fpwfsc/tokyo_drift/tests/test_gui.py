@@ -145,13 +145,18 @@ def test_gui_constructs_and_round_trips(qapp, tmp_path):
         # Sim hardware resolved to the sentinels
         assert (gui.camera, gui.aosystem) == ("Sim", "Sim")
 
-        # GUI -> config -> .ini -> headless run() round trip
+        # GUI -> config -> .ini -> headless run() round trip (stop event
+        # set: this validates the config contract, not the loop)
         gui.update_config_from_gui()
         saved = tmp_path / "gui_roundtrip.ini"
         gui.config.filename = str(saved)
         gui.config.write()
 
-        settings = run("Sim", "Sim", config=str(saved), configspec=SPEC)
+        import threading
+        stop = threading.Event()
+        stop.set()
+        settings = run("Sim", "Sim", config=str(saved), configspec=SPEC,
+                       my_event=stop)["settings"]
         assert settings["MODE"]["mode name"] == "vampires_f760_10zern"
         assert settings["MODE"]["calibration profile"] is None
         assert settings["LOOP_SETTINGS"]["Plot"] is True
