@@ -1,0 +1,14 @@
+mode: vampires_f760_10zern
+instrument: Vampires
+filter: F760
+basis: 10 Zernikes (Noll 2-11, max-abs normalized, D = 7.79 m)
+ts2_config: ts2_config.yaml
+checkpoint: null    # path/URL to the trained model; wired in the NN milestone
+notes: >
+  Reproduces the Oct 2023 VAMPIRES F760 training configuration:
+  256x256 pupil over 8.1795 m (miles_pupil SCExAO aperture,
+  outer = 7.79/7.92), 128x128 focal plane at 6 mas/pix, 5-sample
+  polychromatic filter at 760 nm with 4.21% fractional bandwidth,
+  10-mode Zernike DM with actuate_scale 1e-6, output max-intensity- and
+  per-sample-normalized. The pupil generator is vendored byte-identical
+  at fpwfsc/tokyo_drift/miles_pupil.py.
