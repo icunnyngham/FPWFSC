@@ -68,13 +68,40 @@ def test_manual_poke_sends_and_returns_frame():
 
 
 # --- Integration: the M5 checkpoint --------------------------------------
+#
+# The loop requires a calibration profile. These tests derive one from
+# the (deterministic, seed-matched) injected truth EXPLICITLY at the
+# test layer — the honest equivalent of a perfectly fitted profile.
 
 @pytest.fixture(scope="module")
-def oracle_result():
+def truth_profile(tmp_path_factory):
+    yaml = pytest.importorskip("yaml")
+    from fpwfsc.tokyo_drift.sim.bench_sim import load_preset, sample_truth
+    truth = sample_truth(load_preset("easy"), np.random.default_rng(27))
+    profile = {
+        "mode": "vampires_f760_10zern",
+        "image_rot_deg": float(-truth["image_rot_deg"]) % 360.0,
+        "crop_cx": None,   # auto brightest-pixel on the pristine frame
+        "crop_cy": None,
+        "flip_x": False,
+        "flip_y": False,
+        "dm_scale": float(truth["dm_scale"]),
+        "dm_rot_deg": float(truth["dm_rot_deg"]),
+        "shift_x": 0,
+        "shift_y": 0,
+    }
+    path = tmp_path_factory.mktemp("calibrations") / "truth_easy_27.yaml"
+    path.write_text(yaml.safe_dump(profile))
+    return str(path)
+
+
+@pytest.fixture(scope="module")
+def oracle_result(truth_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 15,
-                         "LOOP_SETTINGS.strehl early stop": 0.95})
+                         "LOOP_SETTINGS.strehl early stop": 0.95,
+                         "MODE.calibration profile": truth_profile})
     return run("Sim", "Sim", config=cfg, configspec=SPEC)
 
 
@@ -99,31 +126,40 @@ def test_oracle_loop_early_stops(oracle_result):
     assert oracle_result["loop"]["iterations"] < 15
 
 
-def test_random_walk_loop_does_not_converge():
+def test_random_walk_loop_does_not_converge(truth_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 5,
-                         "LOOP_SETTINGS.predictor": "random_walk"})
+                         "LOOP_SETTINGS.predictor": "random_walk",
+                         "MODE.calibration profile": truth_profile})
     result = run("Sim", "Sim", config=cfg, configspec=SPEC)
     strehls = result["loop"]["strehls"]
     assert np.nanmax(strehls) < 0.5
 
 
-def test_safety_bounds_trip_on_oversized_command():
+def test_safety_bounds_trip_on_oversized_command(truth_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.dm import DMSafetyError
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 3,
-                         "DM.max actuator stroke (um)": 0.001})
+                         "DM.max actuator stroke (um)": 0.001,
+                         "MODE.calibration profile": truth_profile})
     with pytest.raises(DMSafetyError):
         run("Sim", "Sim", config=cfg, configspec=SPEC)
 
 
-def test_stop_event_interrupts_loop():
+def test_run_requires_calibration_profile():
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
+    cfg = _sim_config()  # profile stays None
+    with pytest.raises(ValueError, match="calibration profile"):
+        run("Sim", "Sim", config=cfg, configspec=SPEC)
+
+
+def test_stop_event_interrupts_loop(truth_profile):
+    pytest.importorskip("telescope_sim")
     # Event set after validation would skip the loop entirely; instead
-    # verify the mid-loop check: 0 iterations complete when the event
+    # verify the mid-loop check: one iteration completes when the event
     # is set by the first plotter callback.
     class StopOnFirstUpdate:
         def __init__(self, event):
@@ -133,7 +169,8 @@ def test_stop_event_interrupts_loop():
             self.event.set()
 
     event = threading.Event()
-    cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 10})
+    cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 10,
+                         "MODE.calibration profile": truth_profile})
     from fpwfsc.tokyo_drift import run as run_mod
     result = run_mod.run("Sim", "Sim", config=cfg, configspec=SPEC,
                          my_event=event, plotter=StopOnFirstUpdate(event))

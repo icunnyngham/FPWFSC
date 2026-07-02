@@ -92,27 +92,38 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     truth = bench.truth
     print(f"tokyo_drift: bench-sim injected truth (sim-only): {truth}")
 
-    # Calibration: until fitted profiles exist, sim mode derives the
-    # alignment parameters straight from the injected truth. This keeps
-    # the loop demonstrable end-to-end; it is loudly labeled because a
-    # *fitted* profile must replace it for calibration validation.
+    # Calibration is a separate, explicit step: the loop only ever
+    # consumes a saved profile (fit one with the calibration harness /
+    # GUI workbench). No profile -> no loop.
     if calibration_profile is None:
-        print("tokyo_drift: no calibration profile selected - deriving "
-              "alignment from bench-sim truth (sim-only shortcut; fit a "
-              "real profile with the calibration tools).")
-        translator = TranslationDM(
-            n_modes=n_modes,
-            dm_actuate_scale=DM_NOMINAL_SCALE / truth["dm_scale"],
-            dm_rot_deg=truth["dm_rot_deg"],
-        )
-        preprocess = PreprocessImage(
-            crop_res=ideal.reference_psf.shape[0],
-            rot_angle=-truth["image_rot_deg"],
-        )
-    else:
-        raise NotImplementedError(
-            "calibration-profile loading lands with the calibration "
-            "milestone; leave 'calibration profile' as None for now")
+        raise ValueError(
+            "no calibration profile selected: fit one (GUI Calibrate "
+            "button, or calibration.harness.calibrate_bench_sim) and set "
+            "[MODE] 'calibration profile'")
+    from .calibration.profiles import assert_sim_safe, load_profile
+    profile = load_profile(calibration_profile)
+    profile_mode = profile.get("mode")
+    if profile_mode is not None and profile_mode != mode_name:
+        raise ValueError(
+            f"calibration profile is for mode {profile_mode!r}, "
+            f"not {mode_name!r}")
+    assert_sim_safe(profile)  # shifts are bench-only; refuse in sim
+
+    translator = TranslationDM(
+        n_modes=n_modes,
+        dm_actuate_scale=DM_NOMINAL_SCALE / profile["dm_scale"],
+        dm_rot_deg=profile["dm_rot_deg"] or None,
+        flip_horizontal=profile["dm_flip_x"],
+        flip_vertical=profile["dm_flip_y"],
+    )
+    preprocess = PreprocessImage(
+        crop_res=ideal.reference_psf.shape[0],
+        rot_angle=profile["image_rot_deg"],
+        center_x=profile["crop_cx"],
+        center_y=profile["crop_cy"],
+        flip_horizontal=profile["flip_x"],
+        flip_vertical=profile["flip_y"],
+    )
 
     # Reference peak-flux ratio from the pristine bench (before the
     # hidden error is injected) - the denominator of the Strehl proxy.
