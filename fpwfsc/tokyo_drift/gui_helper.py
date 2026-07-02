@@ -6,9 +6,54 @@ Same contract as the other pipelines' gui_helper modules:
 carries per-field help/expert metadata for the auto-rendered config
 form, and ``load_instruments`` maps a dropdown choice to a
 ``(Camera, AOSystem)`` pair.
+
+tokyo_drift additions: ``list_modes`` / ``list_calibrations`` populate
+the Mode and Calibration dropdowns from the on-disk registries
+(``modes/<name>/`` directories and ``calibrations/<name>.yaml``
+profiles; calibration profiles are filtered to the selected mode via
+their ``mode:`` key).
 """
+from pathlib import Path
+
+PIPELINE_DIR = Path(__file__).resolve().parent
+MODES_DIR = PIPELINE_DIR / "modes"
+CALIBRATIONS_DIR = PIPELINE_DIR / "calibrations"
 
 valid_instruments = ['Sim', 'Vampires']
+
+
+def list_modes(modes_dir=MODES_DIR):
+    """Names of registered modes (subdirectories of ``modes/``)."""
+    if not Path(modes_dir).is_dir():
+        return []
+    return sorted(p.name for p in Path(modes_dir).iterdir()
+                  if p.is_dir() and not p.name.startswith(('_', '.')))
+
+
+def list_calibrations(mode_name=None, calibrations_dir=CALIBRATIONS_DIR):
+    """Names of saved calibration profiles, optionally filtered by mode.
+
+    Profiles are ``calibrations/<name>.yaml`` files carrying a
+    ``mode: <mode_name>`` key; passing ``mode_name`` returns only the
+    profiles fit against that mode.
+    """
+    if not Path(calibrations_dir).is_dir():
+        return []
+    try:
+        import yaml
+    except ImportError:
+        return []
+    profiles = []
+    for path in sorted(Path(calibrations_dir).glob("*.yaml")):
+        try:
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as exc:
+            print(f"Skipping unreadable calibration profile {path.name}: {exc}")
+            continue
+        if mode_name is None or data.get("mode") == mode_name:
+            profiles.append(path.stem)
+    return profiles
 
 config_info = {
     "MODE": {
@@ -25,6 +70,11 @@ config_info = {
         }
     },
     "LOOP_SETTINGS": {
+        "Plot": {
+            "help": "Show the live plotter (PSF alignment panels, "
+                    "Strehl history, mode coefficients)",
+            "expert": False
+        },
         "N iter": {
             "help": "Number of iterations for the loop",
             "expert": False

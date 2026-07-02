@@ -3,6 +3,7 @@
     calibration profile = string_or_none(default=None)
 
 [LOOP_SETTINGS]
+    Plot              = boolean(default=True)
     N iter            = integer(min=1)
     gain              = float(min=0)
     leak factor       = float(min=0, max=1)
