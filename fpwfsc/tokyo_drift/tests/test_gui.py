@@ -161,7 +161,7 @@ def _fake_calibration(gui):
     report = {"stage_previews": {"raw": raw}, "reference_psf": ref,
               "probe_coefficients": np.zeros(10), "corrector": "zernike_dm",
               "image_rot_error_deg": 0.0, "dm_scale_error_frac": 0.0,
-              "flips_expected_false": True}
+              "dm_scale_over_truth": 1.5, "flips_expected_false": True}
     gui.on_calibration_done(profile, report, None, None)
     return profile
 

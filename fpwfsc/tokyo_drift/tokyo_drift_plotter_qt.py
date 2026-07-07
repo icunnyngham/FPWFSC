@@ -276,6 +276,9 @@ class LivePlotter(QtWidgets.QWidget):
             source_title = payload.get("source_title")
             if source_title:
                 self.image_plots["source"].setTitle(source_title)
+            ideal_title = payload.get("ideal_title")
+            if ideal_title:
+                self.image_plots["ideal"].setTitle(ideal_title)
 
             # Calibration sweep curve (rotation / scale) borrows the
             # mode-coefficients panel; the next mode_coeffs payload

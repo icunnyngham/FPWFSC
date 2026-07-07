@@ -21,6 +21,9 @@
     seed              = integer_or_none(default=None)
     initial error rms = float(min=0, default=0.15)
 
+[CALIBRATION]
+    probe amplitude = float(min=0, default=0.3)
+
 [CAMERA CALIBRATION]
     background file = string(default='')
     masterflat file = string(default='')

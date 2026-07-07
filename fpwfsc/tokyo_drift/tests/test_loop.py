@@ -69,39 +69,31 @@ def test_manual_poke_sends_and_returns_frame():
 
 # --- Integration: the M5 checkpoint --------------------------------------
 #
-# The loop requires a calibration profile. These tests derive one from
-# the (deterministic, seed-matched) injected truth EXPLICITLY at the
-# test layer — the honest equivalent of a perfectly fitted profile.
+# The loop requires a calibration profile, and since the injected loop
+# error is EXTERNAL (NCPA-like), cancelling it needs the DM's effective
+# command-to-wavefront gain — which only a real fit measures (the
+# injected truth scale alone misses the influence-function gain). So
+# these tests calibrate once and share the fitted profile.
 
 @pytest.fixture(scope="module")
-def truth_profile(tmp_path_factory):
+def fitted_profile(tmp_path_factory):
+    pytest.importorskip("telescope_sim")
     yaml = pytest.importorskip("yaml")
-    from fpwfsc.tokyo_drift.sim.bench_sim import load_preset, sample_truth
-    truth = sample_truth(load_preset("easy"), np.random.default_rng(27))
-    profile = {
-        "mode": "vampires_f760_10zern",
-        "image_rot_deg": float(-truth["image_rot_deg"]) % 360.0,
-        "crop_cx": None,   # auto brightest-pixel on the pristine frame
-        "crop_cy": None,
-        "flip_x": False,
-        "flip_y": False,
-        "dm_scale": float(truth["dm_scale"]),
-        "dm_rot_deg": float(truth["dm_rot_deg"]),
-        "shift_x": 0,
-        "shift_y": 0,
-    }
-    path = tmp_path_factory.mktemp("calibrations") / "truth_easy_27.yaml"
+    from fpwfsc.tokyo_drift.calibration.harness import calibrate_bench_sim
+    profile, _report = calibrate_bench_sim("vampires_f760_10zern",
+                                           preset="easy", seed=27)
+    path = tmp_path_factory.mktemp("calibrations") / "fitted_easy_27.yaml"
     path.write_text(yaml.safe_dump(profile))
     return str(path)
 
 
 @pytest.fixture(scope="module")
-def oracle_result(truth_profile):
+def oracle_result(fitted_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 15,
                          "LOOP_SETTINGS.strehl early stop": 0.95,
-                         "MODE.calibration profile": truth_profile})
+                         "MODE.calibration profile": fitted_profile})
     return run("Sim", "Sim", config=cfg, configspec=SPEC)
 
 
@@ -126,13 +118,13 @@ def test_oracle_loop_early_stops(oracle_result):
     assert oracle_result["loop"]["iterations"] < 15
 
 
-def test_random_walk_loop_does_not_converge_and_logs(truth_profile,
+def test_random_walk_loop_does_not_converge_and_logs(fitted_profile,
                                                      tmp_path):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 5,
                          "LOOP_SETTINGS.predictor": "random_walk",
-                         "MODE.calibration profile": truth_profile,
+                         "MODE.calibration profile": fitted_profile,
                          "IO.save_log": True,
                          "IO.log_path": str(tmp_path)})
     result = run("Sim", "Sim", config=cfg, configspec=SPEC)
@@ -151,13 +143,13 @@ def test_random_walk_loop_does_not_converge_and_logs(truth_profile,
     assert (session / "iter_000" / "dm_command.fits").is_file()
 
 
-def test_safety_bounds_trip_on_oversized_command(truth_profile):
+def test_safety_bounds_trip_on_oversized_command(fitted_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.dm import DMSafetyError
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 3,
                          "DM.max actuator stroke (um)": 0.001,
-                         "MODE.calibration profile": truth_profile})
+                         "MODE.calibration profile": fitted_profile})
     with pytest.raises(DMSafetyError):
         run("Sim", "Sim", config=cfg, configspec=SPEC)
 
@@ -170,7 +162,7 @@ def test_run_requires_calibration_profile():
         run("Sim", "Sim", config=cfg, configspec=SPEC)
 
 
-def test_stop_event_interrupts_loop(truth_profile):
+def test_stop_event_interrupts_loop(fitted_profile):
     pytest.importorskip("telescope_sim")
     # Event set after validation would skip the loop entirely; instead
     # verify the mid-loop check: one iteration completes when the event
@@ -184,7 +176,7 @@ def test_stop_event_interrupts_loop(truth_profile):
 
     event = threading.Event()
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 10,
-                         "MODE.calibration profile": truth_profile})
+                         "MODE.calibration profile": fitted_profile})
     from fpwfsc.tokyo_drift import run as run_mod
     result = run_mod.run("Sim", "Sim", config=cfg, configspec=SPEC,
                          my_event=event, plotter=StopOnFirstUpdate(event))

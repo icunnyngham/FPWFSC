@@ -226,6 +226,10 @@ class BenchSim:
         self.derived_config = derive_bench_config(base_config, self.truth,
                                                   render_res=render_res)
         self.aperture_area = float(base_config["aperture"].get("area", 0.0))
+        # The mode's training corrector block (kept for expressing
+        # external errors in the training modal basis).
+        self._base_corrector = base_config["correctors"][
+            base_config["corrector_chain"][0]]
 
         tmp = tempfile.NamedTemporaryFile(
             "w", suffix=".yaml", delete=False)
@@ -242,6 +246,7 @@ class BenchSim:
         n = DM_NUM_ACTUATORS
         self._dm_command = np.zeros((n, n))
         self._error_command = np.zeros((n, n))
+        self._error_opd = None
 
     @classmethod
     def from_mode(cls, mode_name, **kwargs):
@@ -257,11 +262,38 @@ class BenchSim:
 
     def set_error_command(self, dm_microns):
         """Inject a hidden static surface error (microns), added to
-        every user command — "the DM's flat isn't flat". This is the
-        aberration a closed loop must find and cancel; the loop's
-        converged state is the negative of this command. Sim-only side
-        channel: nothing on the real bench corresponds to it."""
+        every user command — "the DM's flat isn't flat". DM-borne error
+        class: it renders through the same influence functions as
+        corrections do. Sim-only side channel."""
         self._error_command = self._validated(dm_microns)
+
+    def set_error_opd(self, opd_field):
+        """Inject a hidden static EXTERNAL wavefront error (OPD in
+        meters over the pupil grid) — the NCPA-like error class the
+        real bench actually fights. Applied via the TS2 atmosphere
+        hook, so it does NOT pass through the DM's influence functions;
+        cancelling it requires the DM's *effective* command-to-
+        wavefront gain, which is exactly what the dm_scale calibration
+        measures. ``None`` clears."""
+        self._error_opd = opd_field
+
+    def set_modal_error(self, coefficients,
+                        opd_per_unit=2.0 * DM_NOMINAL_SCALE):
+        """External error (:meth:`set_error_opd`) expressed in the
+        mode's training Zernike basis. ``opd_per_unit`` matches the OPD
+        a reflective-DM poke of one coefficient unit would imprint
+        (2 x the nominal surface scale)."""
+        import hcipy
+        pupil = self.derived_config["pupil"]
+        grid = hcipy.make_pupil_grid(int(pupil["resolution"]),
+                                     float(pupil["extent"]))
+        corr = self._base_corrector
+        basis = hcipy.make_zernike_basis(
+            len(coefficients), float(corr["zernike_diameter"]), grid,
+            starting_mode=int(corr.get("starting_mode", 2)))
+        basis = hcipy.ModeBasis([b / np.max(np.abs(b)) for b in basis])
+        opd = basis.linear_combination(np.asarray(coefficients, dtype=float))
+        self.set_error_opd(opd * float(opd_per_unit))
 
     @staticmethod
     def _validated(dm_microns):
@@ -273,8 +305,20 @@ class BenchSim:
 
     def _render(self):
         effective = self._dm_command + self._error_command
+        kwargs = {}
+        if self._error_opd is not None:
+            opd = self._error_opd
+
+            def atmos(wf):
+                out = wf.copy()
+                out.electric_field = out.electric_field * np.exp(
+                    1j * wf.wavenumber * opd)
+                return out
+
+            kwargs["atmos"] = atmos
         return np.squeeze(np.asarray(
-            self.sim.sample(actuations={"bench_dm": effective})["images"]["psf"]))
+            self.sim.sample(actuations={"bench_dm": effective},
+                            **kwargs)["images"]["psf"]))
 
     def take_image(self, average=1):
         """Render the current optical state and return a mangled,

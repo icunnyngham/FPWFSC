@@ -180,13 +180,14 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         def strehl_fn(frame):
             return peak_flux_ratio(frame) / reference_ratio
 
-    # Inject the hidden wavefront error the loop must correct ("the
-    # DM's flat isn't flat"), expressed in the modal basis via a
-    # nominal, unrotated translator.
+    # Inject the hidden wavefront error the loop must correct — an
+    # EXTERNAL (NCPA-like) aberration in the training modal basis, NOT
+    # routed through the DM: cancelling it requires the DM's effective
+    # command-to-wavefront gain, which is what the calibrated dm_scale
+    # measures (the same physics the real bench absorbed into
+    # dm_actuate_scale ~1.4e-6 against a 1e-6 nominal).
     error_coeffs = rng.normal(0.0, initial_error_rms, n_modes)
-    error_translator = TranslationDM(n_modes=n_modes,
-                                     dm_actuate_scale=DM_NOMINAL_SCALE)
-    bench.set_error_command(error_translator.command_microns(error_coeffs))
+    bench.set_modal_error(error_coeffs)
 
     integrator = LeakyIntegrator(n_modes, gain=gain, leak=leak_factor)
     if predictor_name == 'oracle':

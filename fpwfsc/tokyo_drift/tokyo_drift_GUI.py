@@ -89,7 +89,7 @@ class CalibrationThread(QThread):
     calibration_failed = pyqtSignal(str)
 
     def __init__(self, mode_name, preset, seed, task='auto', around=None,
-                 bench=None, ideal=None):
+                 bench=None, ideal=None, probe_amplitude=0.3):
         super().__init__()
         self.mode_name = mode_name
         self.preset = preset
@@ -98,6 +98,7 @@ class CalibrationThread(QThread):
         self.around = around
         self.bench = bench
         self.ideal = ideal
+        self.probe_amplitude = probe_amplitude
 
     def run(self):
         try:
@@ -113,14 +114,16 @@ class CalibrationThread(QThread):
 
             if self.task == 'view':
                 ctx = acquire_probe(self.mode_name, bench=bench,
-                                    ideal=ideal)
+                                    ideal=ideal,
+                                    probe_amplitude=self.probe_amplitude)
                 self.view_ready.emit(ctx)
                 return
 
             profile, report = calibrate_bench_sim(
                 self.mode_name, bench=bench, ideal=ideal,
                 stage_callback=self.stage_update.emit,
-                around=self.around if self.task == 'fine' else None)
+                around=self.around if self.task == 'fine' else None,
+                probe_amplitude=self.probe_amplitude)
             self.calibration_done.emit(profile, report, bench, ideal)
         except Exception as exc:
             import traceback
@@ -441,6 +444,10 @@ class TokyoDriftConfigGUI(QWidget):
         seed = self.config['SIMULATION']['seed']
         seed = None if seed in (None, 'None', '') else int(seed)
 
+        probe_amplitude = float(
+            self.config['CALIBRATION']['probe amplitude'])
+        self._current_probe_amplitude = probe_amplitude
+
         # Reuse the built sims only while mode/preset/seed are unchanged
         context_key = (mode, preset, seed)
         bench = ideal = None
@@ -450,7 +457,7 @@ class TokyoDriftConfigGUI(QWidget):
 
         self.calibration_thread = CalibrationThread(
             mode, preset, seed, task=task, around=around,
-            bench=bench, ideal=ideal)
+            bench=bench, ideal=ideal, probe_amplitude=probe_amplitude)
         self.calibration_thread.stage_update.connect(self.on_calibration_stage)
         self.calibration_thread.view_ready.connect(self.on_view_ready)
         self.calibration_thread.calibration_done.connect(self.on_calibration_done)
@@ -469,10 +476,12 @@ class TokyoDriftConfigGUI(QWidget):
         self.calib_corrector = ctx["corrector"]
         self._last_scale_render = None
         if self.calib_plotter is not None and not self.calib_plotter.closed:
+            amp = ctx.get("probe_amplitude")
             self.calib_plotter.update({
                 "source": ctx["raw"],
                 "ideal": ctx["reference"],
                 "source_title": "View: raw detector frame (probe poked)",
+                "ideal_title": f"Ideal probe (coma+trefoil, amp {amp})",
             })
         print("View ready: raw probe frame and ideal reference displayed. "
               "Adjust the calibration parameters to align them, or run "
@@ -495,10 +504,12 @@ class TokyoDriftConfigGUI(QWidget):
                 (step, payload["stage"]))
             title += f" (RMS diff {rms:.4f})"
 
+        amp = getattr(self, '_current_probe_amplitude', None)
         update = {
             "source": payload["preview"],
             "ideal": payload["reference"],
             "source_title": title,
+            "ideal_title": f"Ideal probe (coma+trefoil, amp {amp})",
             "progress": {
                 "x": list(self._calib_progress["x"]),
                 "y": list(self._calib_progress["y"]),
@@ -524,7 +535,9 @@ class TokyoDriftConfigGUI(QWidget):
         self._set_calibration_fields(profile)
         print("Calibration complete. Sim-only recovery report: "
               f"rotation error {report['image_rot_error_deg']:.3f} deg, "
-              f"scale error {report['dm_scale_error_frac']:+.3f}, "
+              f"fitted/injected scale {report['dm_scale_over_truth']:.3f} "
+              "(sits above 1 by the DM influence-function gain - that IS "
+              "the effective gain the loop needs), "
               f"flips-as-expected {report['flips_expected_false']}.")
         print("Review/edit the parameters, then 'Save calibration'.")
 

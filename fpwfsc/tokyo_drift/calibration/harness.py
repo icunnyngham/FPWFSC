@@ -28,14 +28,22 @@ def _angle_error_deg(fitted, expected):
     return float((fitted - expected + 180.0) % 360.0 - 180.0)
 
 
+# Default probe strength: ~0.3 um surface peak (visibly asymmetric PSF,
+# but still in the near-linear regime — a full-amplitude probe smears
+# the PSF into speckle where DM-fidelity differences decorrelate the
+# whole field and the residual floor balloons).
+DEFAULT_PROBE_AMPLITUDE = 0.3
+
+
 def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
-                  ideal=None, average=16):
+                  ideal=None, average=16,
+                  probe_amplitude=DEFAULT_PROBE_AMPLITUDE):
     """Build the sims (or reuse the given ones), poke the calibration
     probe, and acquire the frames every calibration path starts from.
 
     Returns a context dict: ``bench, ideal, raw, reference, probe,
-    corrector, n_modes, crop_res``. Also what the GUI's View action
-    displays before any fitting happens.
+    probe_amplitude, corrector, n_modes, crop_res``. Also what the
+    GUI's View action displays before any fitting happens.
     """
     if bench is None:
         bench = BenchSim.from_mode(mode_name, preset=preset, seed=seed)
@@ -44,10 +52,16 @@ def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
     n_modes = mode_n_modes(mode_name)
     corrector = load_ts2_config(mode_name)["corrector_chain"][0]
 
-    probe = probe_coefficients(n_modes)
+    probe = probe_coefficients(n_modes, amplitude=probe_amplitude)
     translator = TranslationDM(n_modes=n_modes,
                                dm_actuate_scale=DM_NOMINAL_SCALE)
-    bench.set_dm_data(translator.command_microns(probe))
+    command = translator.command_microns(probe)
+    nonzero = {f"mode[{i}] (Noll {i + 2})": round(float(c), 3)
+               for i, c in enumerate(probe) if c}
+    print(f"tokyo_drift calibration probe: {nonzero} "
+          f"(amplitude {probe_amplitude}) -> "
+          f"{np.max(np.abs(command)):.3f} um surface peak commanded")
+    bench.set_dm_data(command)
     raw = bench.take_image(average=average)
     bench.set_dm_data(translator.command_microns(np.zeros(n_modes)))
     reference = np.asarray(ideal.psf({corrector: probe}))
@@ -58,6 +72,7 @@ def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
         "raw": raw,
         "reference": reference,
         "probe": probe,
+        "probe_amplitude": probe_amplitude,
         "corrector": corrector,
         "n_modes": n_modes,
         "crop_res": reference.shape[0],
@@ -68,7 +83,9 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
                         average=16, coarse_step=2.0, bench=None,
                         ideal=None, stage_callback=None, around=None,
                         rot_halfwidth=5.0, rot_step=0.1,
-                        scale_halfwidth=0.25):
+                        scale_halfwidth=0.25,
+                        probe_amplitude=DEFAULT_PROBE_AMPLITUDE,
+                        coarse_probe_amplitude=1.0):
     """Fit a calibration profile against a bench sim; report recovery.
 
     Returns ``(profile, report)``. The fitters see only what real
@@ -88,17 +105,20 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
     the fast session-start recalibration (the bench workflow: a narrow
     sweep around the previously saved rotation).
     """
-    def _emit(stage, params, preview, curve=None, curve_title=None):
+    def _emit(stage, params, preview, curve=None, curve_title=None,
+              reference=None):
         if stage_callback is not None:
             stage_callback({"stage": stage, "params": dict(params),
-                            "preview": preview, "reference": ref,
+                            "preview": preview,
+                            "reference": ref if reference is None else reference,
                             "curve": curve, "curve_title": curve_title})
 
     # All fitting runs on a known asymmetric probe poke (a null PSF is
     # centro-symmetric — rotation/flips are unidentifiable from it in a
     # clean simulation; see probe_coefficients).
     ctx = acquire_probe(mode_name, preset=preset, seed=seed, bench=bench,
-                        ideal=ideal, average=average)
+                        ideal=ideal, average=average,
+                        probe_amplitude=probe_amplitude)
     bench, ideal = ctx["bench"], ctx["ideal"]
     raw, ref = ctx["raw"], ctx["reference"]
     probe, corrector = ctx["probe"], ctx["corrector"]
@@ -108,15 +128,35 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
     params = {}
     _emit("probe", params, raw)
 
+    # The rotation stage always fits on a STRONG probe: at gentle
+    # amplitude the correlation landscape is too rough for the sweep
+    # (full-circle searches can even alias onto the pupil's near-4-fold
+    # spider symmetry). Everything downstream (center, flips, scale,
+    # display) stays at the gentle amplitude where the model-fidelity
+    # floor is low.
+    if coarse_probe_amplitude and coarse_probe_amplitude != probe_amplitude:
+        strong = acquire_probe(mode_name, bench=bench, ideal=ideal,
+                               average=average,
+                               probe_amplitude=coarse_probe_amplitude)
+        rot_raw, rot_ref = strong["raw"], strong["reference"]
+    else:
+        rot_raw, rot_ref = raw, ref
+
     if around is None:
-        rotation = fit_rotation(raw, ref, crop_res, coarse_step=coarse_step)
+        rotation = fit_rotation(rot_raw, rot_ref, crop_res,
+                                coarse_step=coarse_step)
     else:
         current_rot = float(around.get("image_rot_deg", 0.0))
         rotation = fit_rotation(
-            raw, ref, crop_res,
+            rot_raw, rot_ref, crop_res,
             angle_range=(current_rot - rot_halfwidth,
                          current_rot + rot_halfwidth),
             coarse_step=max(5.0 * rot_step, 0.5), refine_step=rot_step)
+    # Preview re-rendered from the gentle frame at the locked angle
+    rotation = dict(rotation)
+    rotation["preview"] = PreprocessImage(
+        crop_res=crop_res, rot_angle=rotation["image_rot_deg"],
+        verbose=False).process(raw, normalize=False)
     params["image_rot_deg"] = rotation["image_rot_deg"]
     _emit("rotation", params, rotation["preview"],
           curve=(rotation["angles"], rotation["scores"]),
@@ -161,9 +201,13 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
     scale = fit_dm_scale(preprocess.process(raw, normalize=True),
                          ideal_psf_fn, probe, scale_grid=scale_grid)
     params["dm_scale"] = scale["dm_scale"]
-    _emit("scale", params, scale["preview"],
+    # The scale stage emits the SAME preprocessing as the other stages
+    # (unnormalized) against the ideal RE-RENDERED at the fitted scale,
+    # so the final progress point reflects the amplitude match.
+    _emit("scale", params, preprocess.process(raw, normalize=False),
           curve=(scale["scales"], scale["scores"]),
-          curve_title="DM-scale match score")
+          curve_title="DM-scale match score",
+          reference=np.asarray(ideal_psf_fn(probe * scale["dm_scale"])))
 
     profile = {
         "mode": mode_name,
@@ -179,12 +223,22 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
     }
 
     # --- recovery report (the ONLY place truth is read) ---------------
+    # NOTE on dm_scale: the fit measures the EFFECTIVE command->
+    # wavefront gain, which includes the actuator influence-function
+    # crosstalk overshoot (a smooth commanded surface renders ~1.2-1.5x
+    # larger) on top of the injected truth scale. That is the quantity
+    # the loop needs — the same physics the real bench absorbed into
+    # dm_actuate_scale (1.4e-6 against a 1e-6 nominal). The ratio
+    # therefore sits ABOVE truth by the influence gain; it is reported
+    # raw, and the meaningful regression gate is loop convergence with
+    # the fitted profile.
     truth = bench.truth
     expected_rot = (-truth["image_rot_deg"]) % 360.0
     report = {
         "truth": dict(truth),
         "image_rot_error_deg": _angle_error_deg(profile["image_rot_deg"],
                                                 expected_rot),
+        "dm_scale_over_truth": profile["dm_scale"] / truth["dm_scale"],
         "dm_scale_error_frac": (profile["dm_scale"] - truth["dm_scale"])
                                / truth["dm_scale"],
         # The bench sim never flips the *image* (DM-side flips are a
@@ -201,6 +255,7 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
         },
         "reference_psf": np.asarray(ref),
         "probe_coefficients": probe,
+        "probe_amplitude": ctx["probe_amplitude"],
         "corrector": corrector,
     }
     return profile, report

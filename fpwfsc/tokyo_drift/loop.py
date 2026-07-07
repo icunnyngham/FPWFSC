@@ -143,6 +143,7 @@ def run_closed_loop(take_image, send_command, predictor, translator,
                 "iteration": completed,
                 "source": frame,
                 "ideal": ideal_psf,
+                "ideal_title": "Ideal (reference PSF)",
                 "strehls": strehls,
                 "mode_coeffs": state,
             })

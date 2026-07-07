@@ -78,6 +78,16 @@ config_info = {
             "expert": True
         }
     },
+    "CALIBRATION": {
+        "probe amplitude": {
+            "help": "Strength of the calibration probe poke (coma + "
+                    "trefoil, in mode-coefficient units; ~1 um surface "
+                    "peak per unit). Default 0.3 keeps the PSF "
+                    "recognizable and near-linear; large values smear "
+                    "it into speckle and inflate the residual floor.",
+            "expert": True
+        }
+    },
     "CAMERA CALIBRATION": {
         "background file": {
             "help": "Path to background (dark) FITS file. Leave empty "
