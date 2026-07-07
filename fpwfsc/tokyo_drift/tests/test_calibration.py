@@ -164,6 +164,40 @@ def test_recovery_on_preset_1_documented_degradation():
     assert abs(report["dm_scale_error_frac"]) < 0.35
 
 
+def test_fine_tune_refines_around_profile():
+    """Fine-tune mode: restricted finer search around a given profile
+    (the fast session-start recalibration). Start from a deliberately
+    perturbed near-truth profile; the fine fit must pull rotation and
+    scale back within its finer resolution, keeping flips fixed."""
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.calibration.harness import (
+        acquire_probe,
+        calibrate_bench_sim,
+    )
+    from fpwfsc.tokyo_drift.sim.bench_sim import load_preset, sample_truth
+
+    truth = sample_truth(load_preset("easy"), np.random.default_rng(27))
+    around = {
+        "image_rot_deg": (-truth["image_rot_deg"]) % 360.0 + 1.5,
+        "dm_scale": truth["dm_scale"] * 1.1,
+        "flip_x": False, "flip_y": False,
+    }
+    ctx = acquire_probe("vampires_f760_10zern", preset="easy", seed=27)
+    stages = []
+    profile, report = calibrate_bench_sim(
+        "vampires_f760_10zern", bench=ctx["bench"], ideal=ctx["ideal"],
+        around=around, stage_callback=lambda p: stages.append(p["stage"]))
+    assert stages == ["probe", "rotation", "center", "flips", "scale"]
+    # The floor here is photon noise + 1-px center quantization on the
+    # score, not sweep resolution — ~0.5 deg observed; sub-pixel at the
+    # field edge and well inside what the loop tolerates.
+    assert abs(report["image_rot_error_deg"]) < 0.6
+    assert abs(report["dm_scale_error_frac"]) < 0.05  # fine grid
+    assert profile["flip_x"] is False and profile["flip_y"] is False
+    # The restricted sweep stayed within its +-5 deg window
+    assert abs(profile["image_rot_deg"] - around["image_rot_deg"]) <= 5.0
+
+
 def test_fitted_profile_drives_converging_loop(easy_recovery, tmp_path):
     """End-to-end M6a checkpoint: calibrate (no truth access), save the
     profile, run the oracle loop with it, converge."""

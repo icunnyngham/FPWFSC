@@ -301,6 +301,85 @@ def test_gui_stage_handler_builds_progress(qapp):
         gui.close()
 
 
+def test_calibration_fields_start_at_defaults(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        assert gui.calib_fields["image_rot_deg"].text() == "0.0"
+        assert gui.calib_fields["dm_scale"].text() == "1.0"
+        assert gui.calib_fields["crop_cx"].text() == "None"
+        assert gui.calib_fields["flip_x"].currentText() == "False"
+        # And they parse back to the profile defaults
+        parsed = gui._profile_from_fields()
+        assert parsed["dm_scale"] == 1.0 and parsed["crop_cx"] is None
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_resolve_run_profile_paths(qapp, tmp_path):
+    import yaml
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        # Named profile selected: passes straight through, no dialog
+        gui._ask_unsaved_run = lambda: pytest.fail("dialog must not open")
+        gui.calibration_select.addItem("saved_prof")
+        gui.calibration_select.setCurrentText("saved_prof")
+        assert gui._resolve_run_profile() == "saved_prof"
+
+        # No profile + cancel -> None
+        gui.calibration_select.setCurrentText("None")
+        gui._ask_unsaved_run = lambda: 'cancel'
+        assert gui._resolve_run_profile() is None
+
+        # No profile + run-without-saving -> ephemeral yaml from fields
+        gui.calib_fields["image_rot_deg"].setText("123.4")
+        gui._ask_unsaved_run = lambda: 'run'
+        path = gui._resolve_run_profile()
+        assert path is not None and path.endswith(".yaml")
+        with open(path) as f:
+            ephemeral = yaml.safe_load(f)
+        assert ephemeral["image_rot_deg"] == 123.4
+        assert ephemeral["mode"] == gui.mode_select.currentText()
+
+        # 'save' chosen but the save dialog cancelled -> None
+        gui._ask_unsaved_run = lambda: 'save'
+        gui.on_save_calibration = lambda: None  # user cancels naming
+        assert gui._resolve_run_profile() is None
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_view_ready_populates_workbench(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        gui.calib_plotter = _StubPlotter()
+        raw = np.random.default_rng(0).random((256, 256))
+        ref = np.random.default_rng(1).random((128, 128))
+        gui.on_view_ready({"bench": "bench_obj", "ideal": None,
+                           "raw": raw, "reference": ref,
+                           "probe": np.zeros(10),
+                           "corrector": "zernike_dm", "n_modes": 10,
+                           "crop_res": 128})
+        assert gui.calib_raw is raw
+        assert gui.calib_bench == "bench_obj"
+        payload = gui.calib_plotter.payloads[-1]
+        assert payload["source_title"].startswith("View: raw detector")
+        # Manual adjustment now works against the cached frame
+        gui.calib_fields["image_rot_deg"].setText("10.0")
+        gui.refresh_calibration_preview()
+        assert gui.calib_plotter.payloads[-1]["source"].shape == (128, 128)
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
 def test_bench_preset_widget_is_dropdown(qapp):
     from PyQt5.QtWidgets import QComboBox
     from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI

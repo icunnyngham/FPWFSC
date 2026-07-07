@@ -21,7 +21,8 @@ import numpy as np
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QComboBox, QPushButton,
                              QScrollArea, QFrame, QToolButton, QSizePolicy,
-                             QFileDialog, QGridLayout, QInputDialog)
+                             QFileDialog, QGridLayout, QInputDialog,
+                             QMessageBox)
 from PyQt5.QtCore import (Qt, pyqtSignal, pyqtSlot, QParallelAnimationGroup,
                           QPropertyAnimation, QAbstractAnimation, QTimer,
                           QThread)
@@ -43,7 +44,9 @@ except ImportError:
     import tokyo_drift_plotter_qt as pf
 
 from fpwfsc.tokyo_drift import gui_helper as helper
-from fpwfsc.tokyo_drift.calibration.profiles import load_profile, save_profile
+from fpwfsc.tokyo_drift.calibration.profiles import (PROFILE_DEFAULTS,
+                                                     load_profile,
+                                                     save_profile)
 from fpwfsc.tokyo_drift.preprocess import PreprocessImage
 from fpwfsc.tokyo_drift.run import run
 
@@ -73,31 +76,51 @@ def diff_rms(frame, reference):
 
 
 class CalibrationThread(QThread):
-    """Runs the staged calibration off the GUI thread, streaming stage
-    previews back via signals."""
+    """Runs calibration work off the GUI thread.
+
+    Tasks: ``'view'`` acquires the probe frame + ideal reference and
+    stops (manual-adjustment mode); ``'auto'`` runs the full staged
+    fit; ``'fine'`` re-fits in a restricted range around the ``around``
+    profile. Existing bench/ideal sims are reused when passed.
+    """
     stage_update = pyqtSignal(dict)
+    view_ready = pyqtSignal(dict)
     calibration_done = pyqtSignal(object, object, object, object)
     calibration_failed = pyqtSignal(str)
 
-    def __init__(self, mode_name, preset, seed):
+    def __init__(self, mode_name, preset, seed, task='auto', around=None,
+                 bench=None, ideal=None):
         super().__init__()
         self.mode_name = mode_name
         self.preset = preset
         self.seed = seed
+        self.task = task
+        self.around = around
+        self.bench = bench
+        self.ideal = ideal
 
     def run(self):
         try:
             from fpwfsc.tokyo_drift.calibration.harness import (
+                acquire_probe,
                 calibrate_bench_sim,
             )
             from fpwfsc.tokyo_drift.sim import BenchSim, IdealSim
 
-            bench = BenchSim.from_mode(self.mode_name, preset=self.preset,
-                                       seed=self.seed)
-            ideal = IdealSim.from_mode(self.mode_name)
+            bench = self.bench or BenchSim.from_mode(
+                self.mode_name, preset=self.preset, seed=self.seed)
+            ideal = self.ideal or IdealSim.from_mode(self.mode_name)
+
+            if self.task == 'view':
+                ctx = acquire_probe(self.mode_name, bench=bench,
+                                    ideal=ideal)
+                self.view_ready.emit(ctx)
+                return
+
             profile, report = calibrate_bench_sim(
                 self.mode_name, bench=bench, ideal=ideal,
-                stage_callback=self.stage_update.emit)
+                stage_callback=self.stage_update.emit,
+                around=self.around if self.task == 'fine' else None)
             self.calibration_done.emit(profile, report, bench, ideal)
         except Exception as exc:
             import traceback
@@ -200,10 +223,12 @@ class TokyoDriftConfigGUI(QWidget):
         self.calib_raw = None          # cached raw probe frame
         self.calib_ref = None          # ideal probe reference
         self.calib_ideal = None        # IdealSim for dm_scale re-renders
+        self.calib_bench = None
         self.calib_probe = None
         self.calib_corrector = None
         self._last_scale_render = None
         self._calib_progress = {"x": [], "y": [], "stage_marks": []}
+        self._calib_context_key = None
 
         self.initUI()
 
@@ -242,9 +267,23 @@ class TokyoDriftConfigGUI(QWidget):
         self.save_calibration_button.clicked.connect(self.on_save_calibration)
         selector_layout.addWidget(self.save_calibration_button, 2, 2)
 
-        self.calibrate_button = QPushButton('Calibrate (fit on current hardware)')
-        self.calibrate_button.clicked.connect(self.on_calibrate_clicked)
-        selector_layout.addWidget(self.calibrate_button, 3, 0, 1, 3)
+        # View: acquire + display, manual adjustment only.
+        # Auto-calibrate: full staged fit (global rotation search).
+        # Fine tune: restricted re-fit around the current field values.
+        calib_buttons = QHBoxLayout()
+        self.view_button = QPushButton('View')
+        self.view_button.clicked.connect(
+            lambda: self._start_calibration_thread('view'))
+        calib_buttons.addWidget(self.view_button)
+        self.calibrate_button = QPushButton('Auto-calibrate')
+        self.calibrate_button.clicked.connect(
+            lambda: self._start_calibration_thread('auto'))
+        calib_buttons.addWidget(self.calibrate_button)
+        self.fine_tune_button = QPushButton('Fine tune')
+        self.fine_tune_button.clicked.connect(
+            lambda: self._start_calibration_thread('fine'))
+        calib_buttons.addWidget(self.fine_tune_button)
+        selector_layout.addLayout(calib_buttons, 3, 0, 1, 3)
 
         main_layout.addLayout(selector_layout)
 
@@ -271,6 +310,8 @@ class TokyoDriftConfigGUI(QWidget):
             self.calib_fields[key] = widget
         self.calib_box.setContentLayout(calib_layout)
         main_layout.addWidget(self.calib_box)
+        # Start from the profile defaults, not blank fields
+        self._set_calibration_fields(PROFILE_DEFAULTS)
 
         # --- Scrollable auto-rendered config form ----------------------
         scroll = QScrollArea(self)
@@ -370,15 +411,29 @@ class TokyoDriftConfigGUI(QWidget):
 
     # --- Calibration workbench -----------------------------------------
 
-    def on_calibrate_clicked(self):
+    def _set_calib_buttons_enabled(self, enabled, busy_label=None):
+        for button, label in ((self.view_button, 'View'),
+                              (self.calibrate_button, 'Auto-calibrate'),
+                              (self.fine_tune_button, 'Fine tune')):
+            button.setEnabled(enabled)
+            button.setText(label if enabled or busy_label is None
+                           else busy_label)
+
+    def _start_calibration_thread(self, task):
         if self.hardware_select.currentText() != 'Sim':
-            print("Calibrate: real-hardware calibration is not wired yet; "
-                  "select 'Sim'.")
+            print("Calibration: real-hardware calibration is not wired "
+                  "yet; select 'Sim'.")
             return
+        around = None
+        if task == 'fine':
+            try:
+                around = self._profile_from_fields()
+            except ValueError as exc:
+                print(f"Fine tune: bad field value ({exc})")
+                return
         if self.calib_plotter is None or self.calib_plotter.closed:
             self.calib_plotter = pf.LivePlotter()
-        self.calibrate_button.setEnabled(False)
-        self.calibrate_button.setText('Calibrating...')
+        self._set_calib_buttons_enabled(False, busy_label='Working...')
         self._calib_progress = {"x": [], "y": [], "stage_marks": []}
 
         mode = self.mode_select.currentText()
@@ -386,11 +441,42 @@ class TokyoDriftConfigGUI(QWidget):
         seed = self.config['SIMULATION']['seed']
         seed = None if seed in (None, 'None', '') else int(seed)
 
-        self.calibration_thread = CalibrationThread(mode, preset, seed)
+        # Reuse the built sims only while mode/preset/seed are unchanged
+        context_key = (mode, preset, seed)
+        bench = ideal = None
+        if context_key == getattr(self, '_calib_context_key', None):
+            bench, ideal = self.calib_bench, self.calib_ideal
+        self._calib_context_key = context_key
+
+        self.calibration_thread = CalibrationThread(
+            mode, preset, seed, task=task, around=around,
+            bench=bench, ideal=ideal)
         self.calibration_thread.stage_update.connect(self.on_calibration_stage)
+        self.calibration_thread.view_ready.connect(self.on_view_ready)
         self.calibration_thread.calibration_done.connect(self.on_calibration_done)
         self.calibration_thread.calibration_failed.connect(self.on_calibration_failed)
         self.calibration_thread.start()
+
+    def on_view_ready(self, ctx):
+        """View acquisition finished: display raw + ideal, enable
+        manual adjustment against the cached frame."""
+        self._set_calib_buttons_enabled(True)
+        self.calib_bench = ctx["bench"]
+        self.calib_ideal = ctx["ideal"]
+        self.calib_raw = ctx["raw"]
+        self.calib_ref = ctx["reference"]
+        self.calib_probe = ctx["probe"]
+        self.calib_corrector = ctx["corrector"]
+        self._last_scale_render = None
+        if self.calib_plotter is not None and not self.calib_plotter.closed:
+            self.calib_plotter.update({
+                "source": ctx["raw"],
+                "ideal": ctx["reference"],
+                "source_title": "View: raw detector frame (probe poked)",
+            })
+        print("View ready: raw probe frame and ideal reference displayed. "
+              "Adjust the calibration parameters to align them, or run "
+              "Auto-calibrate / Fine tune.")
 
     def on_calibration_stage(self, payload):
         print(f"Calibration stage: {payload['stage']} -> {payload['params']}")
@@ -427,8 +513,8 @@ class TokyoDriftConfigGUI(QWidget):
         self.calib_plotter.update(update)
 
     def on_calibration_done(self, profile, report, bench, ideal):
-        self.calibrate_button.setEnabled(True)
-        self.calibrate_button.setText('Calibrate (fit on current hardware)')
+        self._set_calib_buttons_enabled(True)
+        self.calib_bench = bench
         self.calib_raw = report["stage_previews"]["raw"]
         self.calib_ref = report["reference_psf"]
         self.calib_ideal = ideal
@@ -443,8 +529,7 @@ class TokyoDriftConfigGUI(QWidget):
         print("Review/edit the parameters, then 'Save calibration'.")
 
     def on_calibration_failed(self, message):
-        self.calibrate_button.setEnabled(True)
-        self.calibrate_button.setText('Calibrate (fit on current hardware)')
+        self._set_calib_buttons_enabled(True)
         print(f"Calibration failed: {message}")
 
     def _set_calibration_fields(self, params):
@@ -457,7 +542,8 @@ class TokyoDriftConfigGUI(QWidget):
                 if key in CALIB_BOOL_FIELDS:
                     widget.setCurrentText(str(bool(value)))
                 else:
-                    widget.setText("" if value is None else str(value))
+                    # 'None' (auto) shown explicitly rather than blank
+                    widget.setText("None" if value is None else str(value))
         finally:
             self._updating_fields = False
 
@@ -603,6 +689,17 @@ class TokyoDriftConfigGUI(QWidget):
             self.run_stop_button.setStyleSheet("background-color: green; color: white;")
             return
 
+        # The loop only runs against a calibration profile. If none is
+        # selected, offer to save the current workbench parameters or
+        # run with them unsaved (via an ephemeral profile file).
+        resolved_profile = self._resolve_run_profile()
+        if resolved_profile is None:
+            self.is_running = False
+            self.run_stop_button.setText('Run')
+            self.run_stop_button.setStyleSheet(
+                "background-color: green; color: white;")
+            return
+
         print("Current configuration:")
         for section in self.config.sections:
             print(f"[{section}]")
@@ -616,15 +713,81 @@ class TokyoDriftConfigGUI(QWidget):
             self.plotter = None
         self.my_event = threading.Event()
 
+        # The thread gets its own config copy (with the resolved
+        # profile), so GUI edits mid-run never race the loop.
+        thread_config = ConfigObj(self.config)
+        thread_config['MODE']['calibration profile'] = resolved_profile
+
         self.algorithm_thread = AlgorithmThread(
             camera=self.camera,
             aosystem=self.aosystem,
-            config=self.config,
+            config=thread_config,
             spec_file=self.spec_file,
             my_event=self.my_event,
             plotter=self.plotter
         )
         self.algorithm_thread.start()
+
+    def _resolve_run_profile(self):
+        """The calibration profile the loop should run with, or None to
+        abort. A selected named profile passes straight through; with
+        none selected, the user chooses: save the current parameters
+        first, run with them unsaved, or cancel."""
+        name = self.calibration_select.currentText()
+        if name and name != 'None':
+            return name
+
+        choice = self._ask_unsaved_run()
+        if choice == 'cancel':
+            print("Run cancelled: no calibration profile.")
+            return None
+        if choice == 'save':
+            self.on_save_calibration()
+            name = self.calibration_select.currentText()
+            if name and name != 'None':
+                return name
+            print("Run cancelled: calibration was not saved.")
+            return None
+
+        # Run without saving: ephemeral profile from the current fields
+        import tempfile
+
+        import yaml
+        try:
+            profile = self._profile_from_fields()
+        except ValueError as exc:
+            print(f"Run cancelled: bad calibration field value ({exc})")
+            return None
+        profile["mode"] = self.mode_select.currentText()
+        profile.setdefault("shift_x", 0)
+        profile.setdefault("shift_y", 0)
+        tmp = tempfile.NamedTemporaryFile(
+            "w", suffix=".yaml", prefix="tokyo_drift_unsaved_",
+            delete=False)
+        yaml.safe_dump(profile, tmp)
+        tmp.close()
+        print(f"Running with unsaved calibration parameters "
+              f"(ephemeral profile {tmp.name})")
+        return tmp.name
+
+    def _ask_unsaved_run(self):
+        """Dialog: 'save' / 'run' (without saving) / 'cancel'."""
+        box = QMessageBox(self)
+        box.setWindowTitle("No saved calibration")
+        box.setText("No calibration profile is selected.\n"
+                    "The loop needs alignment parameters to run.")
+        save_button = box.addButton("Save current first...",
+                                    QMessageBox.AcceptRole)
+        run_button = box.addButton("Run without saving",
+                                   QMessageBox.DestructiveRole)
+        box.addButton(QMessageBox.Cancel)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked == save_button:
+            return 'save'
+        if clicked == run_button:
+            return 'run'
+        return 'cancel'
 
     # --- Config load / save -------------------------------------------
 

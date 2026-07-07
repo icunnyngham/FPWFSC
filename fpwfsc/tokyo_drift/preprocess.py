@@ -88,9 +88,19 @@ class PreprocessImage:
         if self.cen_y is None or self.cen_x is None:
             self.find_brightest_center(im)
 
+        # Crop around the stored center. Deviation from the bench port:
+        # near-edge centers zero-pad to the requested size instead of
+        # silently returning a mis-shaped array.
         h_res = int(self.res / 2)
-        y, x = self.cen_y, self.cen_x
-        im = im[y - h_res:y + h_res, x - h_res:x + h_res]
+        y, x = int(self.cen_y), int(self.cen_x)
+        y0, y1 = y - h_res, y + h_res
+        x0, x1 = x - h_res, x + h_res
+        pads = ((max(0, -y0), max(0, y1 - im.shape[0])),
+                (max(0, -x0), max(0, x1 - im.shape[1])))
+        im = im[max(y0, 0):min(y1, im.shape[0]),
+                max(x0, 0):min(x1, im.shape[1])]
+        if any(p for pair in pads for p in pair):
+            im = np.pad(im, pads)
 
         if self.flip_v:
             im = np.flipud(im)

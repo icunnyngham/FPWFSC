@@ -64,6 +64,17 @@ def test_find_conv_center_refines_toward_true_center():
     assert abs(proc.cen_y - 128) <= 1 and abs(proc.cen_x - 128) <= 1
 
 
+def test_edge_center_crop_zero_pads_to_size():
+    """A center near the frame edge must still yield a full-size crop
+    (zero-padded), never a silently mis-shaped array."""
+    frame = _gauss_blob(256, 10, 250)  # near the top-right corner
+    proc = PreprocessImage(crop_res=64, rot_angle=0.0)
+    out = proc.process(frame, normalize=False)
+    assert out.shape == (64, 64)
+    peak = np.unravel_index(out.argmax(), out.shape)
+    assert abs(peak[0] - 32) <= 1 and abs(peak[1] - 32) <= 1
+
+
 def test_flips_applied_after_crop():
     frame = _gauss_blob(256, 128, 128) + 0.5 * _gauss_blob(256, 128, 148)
     base = PreprocessImage(crop_res=64, center_x=128, center_y=128)
