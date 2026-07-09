@@ -8,7 +8,7 @@
     gain              = float(min=0)
     leak factor       = float(min=0, max=1)
     strehl early stop = float_or_none(default=None)
-    predictor         = option('oracle', 'random_walk', 'model', default='oracle')
+    predictor         = option('model', 'oracle', 'random_walk', default='model')
     strehl method     = option('vandam', 'proxy', default='vandam')
 
 [MODEL]
@@ -20,13 +20,17 @@
     max peak to valley (um)  = float(min=0)
     max actuator stroke (um) = float(min=0)
 
+# Model<->instrument alignment (GUI display name). 'bench sim preset' is
+# a sim-only control (hidden on real hardware); 'probe amplitude' drives
+# the calibration probe poke in both sim and real modes.
+[ALIGNMENT]
+    bench sim preset = string(default='easy')
+    probe amplitude  = float(min=0, default=0.3)
+
+# Displayed as "Test WFE injection params".
 [SIMULATION]
-    bench sim preset  = string(default='easy')
     seed              = integer_or_none(default=None)
     initial error rms = float(min=0, default=0.15)
-
-[CALIBRATION]
-    probe amplitude = float(min=0, default=0.3)
 
 [CAMERA CALIBRATION]
     background file = string(default='')

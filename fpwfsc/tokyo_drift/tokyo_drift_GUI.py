@@ -13,6 +13,7 @@ Calibration write into the ``[MODE]`` config section, so a saved .ini
 fully reproduces a GUI-configured run.
 """
 import datetime
+import os
 import sys
 import threading
 from pathlib import Path
@@ -290,8 +291,52 @@ class TokyoDriftConfigGUI(QWidget):
 
         main_layout.addLayout(selector_layout)
 
-        # Collapsible calibration-parameter panel: populated by the
-        # staged fit, hand-editable with live panel re-rendering.
+        # --- Model<->instrument alignment section ----------------------
+        # Groups the sim-only bench preset, the calibration probe
+        # amplitude, and the fitted-parameter panel together (top to
+        # bottom), above the auto-rendered config form. Hand-built: the
+        # ALIGNMENT config section is excluded from the auto-form so these
+        # controls can sit alongside the fitted-calibration panel; their
+        # values round-trip through _sync_alignment_widgets_{from,to}_config.
+        align_frame = QFrame()
+        align_frame.setFrameShape(QFrame.StyledPanel)
+        align_outer = QVBoxLayout(align_frame)
+        align_outer.setSpacing(4)
+        align_outer.addWidget(QLabel(f"<b>{helper.ALIGNMENT_DISPLAY}</b>"))
+
+        # bench sim preset (SIM ONLY): registry-backed dropdown, hidden
+        # when the hardware selector is not 'Sim'. Values populated after
+        # the config loads.
+        self.preset_row = QWidget()
+        preset_layout = QHBoxLayout(self.preset_row)
+        preset_layout.setContentsMargins(0, 0, 0, 0)
+        preset_label = QLabel("bench sim preset")
+        preset_label.setToolTip(
+            helper.get_help_message(helper.ALIGNMENT_SECTION, "bench sim preset"))
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems([
+            str(c) for c in
+            (helper.get_choices(helper.ALIGNMENT_SECTION, "bench sim preset") or [])])
+        self.preset_combo.setFixedHeight(20)
+        preset_layout.addWidget(preset_label)
+        preset_layout.addWidget(self.preset_combo)
+        align_outer.addWidget(self.preset_row)
+
+        # probe amplitude (used in both sim and real calibration).
+        amp_row = QWidget()
+        amp_layout = QHBoxLayout(amp_row)
+        amp_layout.setContentsMargins(0, 0, 0, 0)
+        amp_label = QLabel("probe amplitude")
+        amp_label.setToolTip(
+            helper.get_help_message(helper.ALIGNMENT_SECTION, "probe amplitude"))
+        self.probe_amp_field = QLineEdit("")
+        self.probe_amp_field.setFixedHeight(20)
+        amp_layout.addWidget(amp_label)
+        amp_layout.addWidget(self.probe_amp_field)
+        align_outer.addWidget(amp_row)
+
+        # Collapsible fitted-calibration panel: populated by the staged
+        # fit, hand-editable with live panel re-rendering.
         self.calib_box = CollapsibleBox("Calibration parameters")
         calib_layout = QGridLayout()
         calib_layout.setVerticalSpacing(2)
@@ -312,7 +357,9 @@ class TokyoDriftConfigGUI(QWidget):
             calib_layout.addWidget(widget, i, 1)
             self.calib_fields[key] = widget
         self.calib_box.setContentLayout(calib_layout)
-        main_layout.addWidget(self.calib_box)
+        align_outer.addWidget(self.calib_box)
+
+        main_layout.addWidget(align_frame)
         # Start from the profile defaults, not blank fields
         self._set_calibration_fields(PROFILE_DEFAULTS)
 
@@ -329,6 +376,7 @@ class TokyoDriftConfigGUI(QWidget):
         self.load_config(initial_load=True)
         self.populate_mode_selectors()
         self.create_widgets()
+        self._sync_alignment_widgets_from_config()
 
         # --- Buttons ----------------------------------------------------
         button_layout = QGridLayout()
@@ -398,6 +446,35 @@ class TokyoDriftConfigGUI(QWidget):
 
     def on_mode_changed(self, _mode_name):
         self.populate_calibration_selector()
+        self._warn_if_model_unavailable()
+
+    def _model_availability_message(self, mode):
+        """None if the mode's NN checkpoint resolves, else an explanatory
+        message. Pure logic (no UI) so it can be unit-tested."""
+        if not mode:
+            return None
+        from .mode_registry import checkpoint_path
+        try:
+            checkpoint_path(mode)
+            return None
+        except (ValueError, FileNotFoundError, KeyError) as exc:
+            return (
+                f"The trained NN for mode '{mode}' is not available:\n\n"
+                f"{exc}\n\nThe 'Tokyo Drift (NN)' predictor will not run "
+                f"until the checkpoint is in place; the debug predictors "
+                f"(Oracle / Random walk) still work.")
+
+    def _warn_if_model_unavailable(self):
+        """Alert on mode entry if the NN checkpoint is missing, so the
+        user learns before Run rather than mid-loop."""
+        message = self._model_availability_message(
+            self.mode_select.currentText())
+        if message is None:
+            return
+        print(f"tokyo_drift: {message}")
+        # A modal would block headless (offscreen) test runs; skip it there.
+        if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            QMessageBox.warning(self, "Model checkpoint unavailable", message)
 
     def on_calibration_selected(self, name):
         """Load a saved profile into the parameter panel (and preview it
@@ -439,13 +516,20 @@ class TokyoDriftConfigGUI(QWidget):
         self._set_calib_buttons_enabled(False, busy_label='Working...')
         self._calib_progress = {"x": [], "y": [], "stage_marks": []}
 
+        # Sync the form into self.config first: View / Auto-calibrate /
+        # Fine tune all read the preset, seed, and probe amplitude from
+        # self.config, which otherwise still holds the loaded values (edits
+        # to the dropdowns/fields were never flushed) — the bench sim would
+        # silently ignore a changed preset.
+        self.update_config_from_gui()
+
         mode = self.mode_select.currentText()
-        preset = str(self.config['SIMULATION']['bench sim preset'])
+        preset = str(self.config['ALIGNMENT']['bench sim preset'])
         seed = self.config['SIMULATION']['seed']
         seed = None if seed in (None, 'None', '') else int(seed)
 
         probe_amplitude = float(
-            self.config['CALIBRATION']['probe amplitude'])
+            self.config['ALIGNMENT']['probe amplitude'])
         self._current_probe_amplitude = probe_amplitude
 
         # Reuse the built sims only while mode/preset/seed are unchanged
@@ -657,6 +741,13 @@ class TokyoDriftConfigGUI(QWidget):
                 self.hardware_select.setCurrentIndex(default_index)
                 self.hardware_select.blockSignals(False)
                 self.camera, self.aosystem = 'Sim', 'Sim'
+        self._apply_sim_only_visibility()
+
+    def _apply_sim_only_visibility(self):
+        """Show sim-only controls (the bench-sim preset) only in Sim mode;
+        they inject fake hardware and have no meaning on a real instrument."""
+        is_sim = self.hardware_select.currentText() == 'Sim'
+        self.preset_row.setVisible(is_sim)
 
     # --- Run / stop -------------------------------------------------------
 
@@ -701,6 +792,22 @@ class TokyoDriftConfigGUI(QWidget):
             self.run_stop_button.setText('Run')
             self.run_stop_button.setStyleSheet("background-color: green; color: white;")
             return
+
+        # The NN predictor needs its checkpoint present: fail fast with an
+        # informative dialog rather than a mid-run thread traceback.
+        if self.config['LOOP_SETTINGS']['predictor'] == 'model':
+            message = self._model_availability_message(
+                self.config['MODE']['mode name'])
+            if message is not None:
+                print(f"tokyo_drift: cannot run - {message}")
+                if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                    QMessageBox.critical(
+                        self, "Cannot run: model unavailable", message)
+                self.is_running = False
+                self.run_stop_button.setText('Run')
+                self.run_stop_button.setStyleSheet(
+                    "background-color: green; color: white;")
+                return
 
         # The loop only runs against a calibration profile. If none is
         # selected, offer to save the current workbench parameters or
@@ -881,14 +988,15 @@ class TokyoDriftConfigGUI(QWidget):
 
     def create_widgets(self):
         for section, items in self.config.items():
-            if section in SELECTOR_SECTIONS:
-                continue  # owned by the top dropdowns
+            if (section in SELECTOR_SECTIONS
+                    or section == helper.ALIGNMENT_SECTION):
+                continue  # owned by the top dropdowns / hand-rendered above
             section_frame = QFrame()
             section_frame.setFrameShape(QFrame.StyledPanel)
             section_layout = QVBoxLayout(section_frame)
             section_layout.setSpacing(4)
 
-            section_label = QLabel(f"<b>{section}</b>")
+            section_label = QLabel(f"<b>{helper.section_display_name(section)}</b>")
             section_layout.addWidget(section_label)
 
             regular_options = []
@@ -1016,9 +1124,23 @@ class TokyoDriftConfigGUI(QWidget):
         if spec:
             if 'option(' in spec:
                 input_widget = QComboBox()
-                options = spec.split('option(')[1].split(')')[0].replace("'", "").split(',')
-                input_widget.addItems([opt.strip() for opt in options])
-                input_widget.setCurrentText(str(value).strip())
+                labels = helper.get_option_labels(section, key)
+                if labels:
+                    # Explicit (value -> display label) map, display order;
+                    # the stored value stays the internal token via itemData.
+                    for opt_value, opt_label in labels:
+                        input_widget.addItem(opt_label, opt_value)
+                    index = input_widget.findData(str(value).strip())
+                    if index >= 0:
+                        input_widget.setCurrentIndex(index)
+                    input_widget._uses_item_data = True
+                else:
+                    raw = spec.split('option(')[1].rsplit(')', 1)[0]
+                    options = [o.strip().strip("'\"") for o in raw.split(',')]
+                    # Drop the trailing default=... keyword the spec carries.
+                    options = [o for o in options if o and '=' not in o]
+                    input_widget.addItems(options)
+                    input_widget.setCurrentText(str(value).strip())
             elif 'boolean' in spec:
                 input_widget = QComboBox()
                 input_widget.addItems(['True', 'False'])
@@ -1044,9 +1166,12 @@ class TokyoDriftConfigGUI(QWidget):
     # --- GUI <-> config sync ---------------------------------------------
 
     def update_config_from_gui(self):
-        # Selector-owned section first
+        # Selector-owned + hand-rendered sections first (not in the
+        # auto-rendered scroll layout below).
         self.config['MODE']['mode name'] = self.mode_select.currentText()
         self.config['MODE']['calibration profile'] = self.calibration_select.currentText()
+        self.config['ALIGNMENT']['bench sim preset'] = self.preset_combo.currentText()
+        self.config['ALIGNMENT']['probe amplitude'] = self.probe_amp_field.text()
 
         for i in range(self.layout.count()):
             section_frame = self.layout.itemAt(i).widget()
@@ -1054,6 +1179,7 @@ class TokyoDriftConfigGUI(QWidget):
                 section_layout = section_frame.layout()
                 section_label = section_layout.itemAt(0).widget()
                 section = section_label.text().strip('<b>').strip('</b>')
+                section = helper.section_key_from_label(section)
 
                 for j in range(1, section_layout.count()):
                     item = section_layout.itemAt(j).widget()
@@ -1080,14 +1206,26 @@ class TokyoDriftConfigGUI(QWidget):
         self.config.validate(validator, preserve_errors=True)
 
     def update_gui_from_config(self):
+        self._sync_alignment_widgets_from_config()
         for i in range(self.layout.count()):
             section_frame = self.layout.itemAt(i).widget()
             if isinstance(section_frame, QFrame):
                 section_layout = section_frame.layout()
                 section_label = section_layout.itemAt(0).widget()
                 section = section_label.text().strip('<b>').strip('</b>')
+                section = helper.section_key_from_label(section)
 
                 self.update_section_widgets(section_layout, self.config[section])
+
+    def _sync_alignment_widgets_from_config(self):
+        """Push the ALIGNMENT config values into the hand-rendered
+        widgets (they live outside the auto-form scroll layout)."""
+        align = self.config.get('ALIGNMENT', {})
+        preset = str(align.get('bench sim preset', '')).strip()
+        index = self.preset_combo.findText(preset)
+        if index >= 0:
+            self.preset_combo.setCurrentIndex(index)
+        self.probe_amp_field.setText(str(align.get('probe amplitude', '')))
 
     def update_section_widgets(self, section_layout, config_section):
         for i in range(1, section_layout.count()):
@@ -1128,6 +1266,10 @@ class TokyoDriftConfigGUI(QWidget):
         if isinstance(widget, QLineEdit):
             return widget.text()
         elif isinstance(widget, QComboBox):
+            # Dropdowns with a display-label map store the internal token
+            # as itemData; plain combos use the visible text.
+            if getattr(widget, '_uses_item_data', False):
+                return widget.currentData()
             return widget.currentText()
         elif hasattr(widget, 'text_field') and isinstance(widget.text_field, QLineEdit):
             return widget.text_field.text()
@@ -1139,10 +1281,13 @@ class TokyoDriftConfigGUI(QWidget):
         if isinstance(widget, QLineEdit):
             widget.setText(str(value))
         elif isinstance(widget, QComboBox):
-            index = widget.findText(str(value))
+            if getattr(widget, '_uses_item_data', False):
+                index = widget.findData(str(value).strip())
+            else:
+                index = widget.findText(str(value))
             if index >= 0:
                 widget.setCurrentIndex(index)
-            else:
+            elif not getattr(widget, '_uses_item_data', False):
                 widget.setCurrentText(str(value))
         elif hasattr(widget, 'text_field') and isinstance(widget.text_field, QLineEdit):
             widget.text_field.setText(str(value))

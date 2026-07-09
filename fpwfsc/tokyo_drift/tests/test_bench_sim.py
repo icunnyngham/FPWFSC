@@ -9,7 +9,7 @@ from fpwfsc.tokyo_drift.sim.bench_sim import (
     sample_truth,
 )
 
-SHIPPED_PRESETS = ["easy", "realistic_vampires", "stress_test", "preset_1"]
+SHIPPED_PRESETS = ["easy", "realistic_vampires", "stress_test", "vampires_2024_measured"]
 TRUTH_KEYS = {"image_rot_deg", "dm_rot_deg", "crop_dx", "crop_dy",
               "dm_scale", "dm_flip_x", "dm_flip_y"}
 
@@ -30,9 +30,9 @@ def test_unknown_preset_raises():
         load_preset("no_such_preset")
 
 
-def test_preset_1_is_deterministic():
+def test_vampires_2024_preset_is_deterministic():
     pytest.importorskip("yaml")
-    preset = load_preset("preset_1")
+    preset = load_preset("vampires_2024_measured")
     t1 = sample_truth(preset, np.random.default_rng(1))
     t2 = sample_truth(preset, np.random.default_rng(2))
     assert t1 == t2
@@ -164,7 +164,7 @@ def bench():
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.sim import BenchSim
     return BenchSim.from_mode("vampires_f760_10zern",
-                              preset="preset_1", seed=42)
+                              preset="vampires_2024_measured", seed=42)
 
 
 def test_bench_truth_matches_fixed_preset(bench):

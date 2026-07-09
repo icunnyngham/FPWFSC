@@ -73,9 +73,9 @@ def test_log_display_handles_empty_image():
 
 def test_bench_preset_field_is_a_dropdown():
     from fpwfsc.tokyo_drift import gui_helper as gh
-    choices = gh.get_choices("SIMULATION", "bench sim preset")
+    choices = gh.get_choices("ALIGNMENT", "bench sim preset")
     assert set(choices) >= {"easy", "realistic_vampires", "stress_test",
-                            "preset_1"}
+                            "vampires_2024_measured"}
     assert gh.get_choices("SIMULATION", "seed") is None
 
 
@@ -386,7 +386,7 @@ def test_bench_preset_widget_is_dropdown(qapp):
 
     gui = TokyoDriftConfigGUI()
     try:
-        widget = gui.create_input_widget("SIMULATION", "bench sim preset",
+        widget = gui.create_input_widget("ALIGNMENT", "bench sim preset",
                                          "easy")
         assert isinstance(widget, QComboBox)
         items = [widget.itemText(i) for i in range(widget.count())]
@@ -430,6 +430,133 @@ def test_gui_constructs_and_round_trips(qapp, tmp_path):
         assert settings["MODE"]["mode name"] == "vampires_f760_10zern"
         assert settings["MODE"]["calibration profile"] is None
         assert settings["LOOP_SETTINGS"]["Plot"] is True
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+# --- Section display names / predictor labels / alignment (no Qt) ------
+
+def test_section_display_name_round_trip():
+    assert helper.section_display_name("SIMULATION") == "Test WFE injection params"
+    assert helper.section_key_from_label(
+        "Test WFE injection params") == "SIMULATION"
+    # Unmapped sections are identity in both directions.
+    assert helper.section_display_name("DM") == "DM"
+    assert helper.section_key_from_label("DM") == "DM"
+
+
+def test_predictor_option_labels_map_model_first():
+    labels = helper.get_option_labels("LOOP_SETTINGS", "predictor")
+    assert labels[0] == ("model", "Tokyo Drift (NN)")
+    values = [v for v, _ in labels]
+    assert values == ["model", "oracle", "random_walk"]
+
+
+def test_bench_preset_is_sim_only_flag():
+    assert helper.is_sim_only("ALIGNMENT", "bench sim preset") is True
+    assert helper.is_sim_only("ALIGNMENT", "probe amplitude") is False
+    assert helper.is_sim_only("SIMULATION", "seed") is False
+
+
+# --- GUI wiring for the reorg (Qt) -------------------------------------
+
+def test_predictor_dropdown_shows_labels_stores_values(qapp):
+    from PyQt5.QtWidgets import QComboBox
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        widget = gui.create_input_widget("LOOP_SETTINGS", "predictor", "model")
+        assert isinstance(widget, QComboBox)
+        shown = [widget.itemText(i) for i in range(widget.count())]
+        assert shown == ["Tokyo Drift (NN)", "Oracle (debug)",
+                         "Random walk (debug)"]
+        # The stored value is the internal token, not the display label.
+        assert widget.currentData() == "model"
+        assert gui.get_widget_value(widget) == "model"
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_alignment_section_syncs_to_config(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        gui.preset_combo.setCurrentText("stress_test")
+        gui.probe_amp_field.setText("0.5")
+        gui.update_config_from_gui()
+        assert gui.config["ALIGNMENT"]["bench sim preset"] == "stress_test"
+        assert float(gui.config["ALIGNMENT"]["probe amplitude"]) == 0.5
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_bench_preset_hidden_off_sim(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        # Default hardware is Sim -> the sim-only preset row shows.
+        assert not gui.preset_row.isHidden()
+        # Force a non-Sim selection without triggering the (SCExAO-only)
+        # hardware loader, then re-apply visibility.
+        gui.hardware_select.blockSignals(True)
+        gui.hardware_select.setCurrentText("Vampires")
+        gui.hardware_select.blockSignals(False)
+        gui._apply_sim_only_visibility()
+        assert gui.preset_row.isHidden()
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_model_availability_message(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        assert gui._model_availability_message("") is None
+        msg = gui._model_availability_message("definitely_not_a_mode")
+        assert msg is not None and "definitely_not_a_mode" in msg
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_calibration_reads_current_preset_not_stale(qapp, monkeypatch):
+    """Regression: View/Auto-calibrate/Fine-tune must read the CURRENT
+    form values. The preset dropdown change previously never reached the
+    bench sim (the form was only flushed on Save/Run)."""
+    import fpwfsc.tokyo_drift.tokyo_drift_GUI as G
+
+    class _Sig:
+        def connect(self, *_a):
+            pass
+
+    captured = {}
+
+    class FakeThread:
+        stage_update = _Sig()
+        view_ready = _Sig()
+        calibration_done = _Sig()
+        calibration_failed = _Sig()
+
+        def __init__(self, mode, preset, seed, **_kw):
+            captured["preset"] = preset
+
+        def start(self):
+            pass
+
+    gui = G.TokyoDriftConfigGUI()
+    try:
+        monkeypatch.setattr(G, "CalibrationThread", FakeThread)
+        gui.preset_combo.setCurrentText("stress_test")  # user changes it
+        gui._start_calibration_thread("view")
+        assert captured["preset"] == "stress_test"  # not the stale default
     finally:
         gui.thread_check_timer.stop()
         gui.close()

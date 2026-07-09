@@ -65,18 +65,22 @@ not identifiable from a null frame.
 
 ## Predictors
 
-`[LOOP_SETTINGS] predictor` selects what drives the loop:
+`[LOOP_SETTINGS] predictor` selects what drives the loop (shown in the GUI
+as friendly labels; the `.ini` stores the internal token):
 
-- **`model`** — the trained NN. Loaded from the mode's checkpoint (the
-  manifest `checkpoint:` pointer, resolved relative to the mode dir).
-  Checkpoints are large and **never committed** (`.gitignore`); drop the
-  converted `.pt` into the mode directory. The `.pt` is self-describing
-  (its `meta` carries the full architecture), so nothing model-specific
-  is hardcoded. Per-inference latency is printed once at loop start.
-- **`oracle`** — sim-only; reads the injected truth through a side
-  channel. The loop must converge; validates everything except the NN.
-- **`random_walk`** — pure noise; the loop must diverge (a sanity check
-  that no information is leaking).
+- **`model`** — *"Tokyo Drift (NN)"*, the **default**. The trained NN,
+  loaded from the mode's checkpoint (the manifest `checkpoint:` pointer,
+  resolved relative to the mode dir). Checkpoints are large and **never
+  committed** (`.gitignore`); drop the converted `.pt` into the mode
+  directory. The `.pt` is self-describing (its `meta` carries the full
+  architecture), so nothing model-specific is hardcoded. If the checkpoint
+  is missing, the GUI alerts on mode selection and refuses to Run with a
+  clear message. Per-inference latency is printed once at loop start.
+- **`oracle`** — *"Oracle (debug)"*; sim-only, reads the injected truth
+  through a side channel. The loop must converge; validates everything
+  except the NN.
+- **`random_walk`** — *"Random walk (debug)"*; pure noise, the loop must
+  diverge (a sanity check that no information is leaking).
 
 The NN model wrapper (`model_torch.py`) is vendored byte-identical from
 the validated conversion project (the same code the closed-loop eval
@@ -110,7 +114,8 @@ with no initial move.
 | `[LOOP_SETTINGS]` | Iterations, gain, leak factor, predictor selection (`model` / `oracle` / `random_walk`), Strehl estimator (`vandam` / `proxy`), optional Strehl early-stop |
 | `[MODEL]` | NN inference: initial diversity-move RMS, torch device (`cpu` / `mps` / `cuda`) — used only by the `model` predictor |
 | `[DM]` | MILK shared-memory channel and command safety bounds |
-| `[SIMULATION]` | Bench-sim misalignment preset, seed, injected initial error (sim mode only) |
+| `[ALIGNMENT]` (shown as *Model↔instrument alignment*) | The bench-sim misalignment preset (**sim-only**, hidden on real hardware) and the calibration probe amplitude; grouped in the GUI with the fitted-calibration panel |
+| `[SIMULATION]` (shown as *Test WFE injection params*) | Seed and injected initial-error RMS — the known aberration the loop is asked to correct |
 | `[CAMERA CALIBRATION]` | Background / masterflat / bad-pixel FITS files (empty fields fall back to border-median background estimation) |
 | `[IO]` | Per-iteration session logging; hitchhiker file-stream mode |
 

@@ -60,7 +60,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     max_ptv_um = settings['DM']['max peak to valley (um)']
     max_stroke_um = settings['DM']['max actuator stroke (um)']
 
-    preset_name = settings['SIMULATION']['bench sim preset']
+    preset_name = settings['ALIGNMENT']['bench sim preset']
     seed = settings['SIMULATION']['seed']
     initial_error_rms = settings['SIMULATION']['initial error rms']
 

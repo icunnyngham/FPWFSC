@@ -168,8 +168,8 @@ def test_recovery_on_realistic_preset():
     assert report["flips_expected_false"]
 
 
-def test_recovery_on_preset_1_documented_degradation():
-    """preset_1 couples a large DM rotation (-6.25 deg) with a 1.3x
+def test_recovery_on_vampires_2024_preset_documented_degradation():
+    """vampires_2024_measured couples a large DM rotation (-6.25 deg) with a 1.3x
     scale error; the v1 single-probe fit degrades there (image-rot fit
     partially absorbs the DM rotation, biasing the scale match). Pin
     the current degradation envelope so improvements/regressions show;
@@ -177,7 +177,7 @@ def test_recovery_on_preset_1_documented_degradation():
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.calibration.harness import calibrate_bench_sim
     profile, report = calibrate_bench_sim("vampires_f760_10zern",
-                                          preset="preset_1", seed=1)
+                                          preset="vampires_2024_measured", seed=1)
     assert abs(report["image_rot_error_deg"]) < 6.0
     assert 0.8 < report["dm_scale_over_truth"] < 1.8
 

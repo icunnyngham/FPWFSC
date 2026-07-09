@@ -92,6 +92,7 @@ def oracle_result(fitted_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 15,
+                         "LOOP_SETTINGS.predictor": "oracle",
                          "LOOP_SETTINGS.strehl early stop": 0.95,
                          "MODE.calibration profile": fitted_profile})
     return run("Sim", "Sim", config=cfg, configspec=SPEC)
@@ -148,6 +149,7 @@ def test_safety_bounds_trip_on_oversized_command(fitted_profile):
     from fpwfsc.tokyo_drift.dm import DMSafetyError
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 3,
+                         "LOOP_SETTINGS.predictor": "oracle",
                          "DM.max actuator stroke (um)": 0.001,
                          "MODE.calibration profile": fitted_profile})
     with pytest.raises(DMSafetyError):
@@ -176,6 +178,7 @@ def test_stop_event_interrupts_loop(fitted_profile):
 
     event = threading.Event()
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 10,
+                         "LOOP_SETTINGS.predictor": "oracle",
                          "MODE.calibration profile": fitted_profile})
     from fpwfsc.tokyo_drift import run as run_mod
     result = run_mod.run("Sim", "Sim", config=cfg, configspec=SPEC,

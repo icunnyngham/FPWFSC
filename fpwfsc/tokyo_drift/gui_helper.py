@@ -95,14 +95,24 @@ config_info = {
             "expert": True
         }
     },
-    "CALIBRATION": {
+    "ALIGNMENT": {
+        "bench sim preset": {
+            "help": "Misalignment-injection preset for the simulated "
+                    "bench: the priors for the camera rotation / crop "
+                    "offset / DM rotation / scale / flips that "
+                    "calibration must recover. Sim-only (hidden on real "
+                    "hardware).",
+            "choices": _bench_sim_presets,
+            "sim_only": True,
+            "expert": False
+        },
         "probe amplitude": {
             "help": "Strength of the calibration probe poke (coma + "
                     "trefoil, in mode-coefficient units; ~1 um surface "
                     "peak per unit). Default 0.3 keeps the PSF "
                     "recognizable and near-linear; large values smear "
                     "it into speckle and inflate the residual floor.",
-            "expert": True
+            "expert": False
         }
     },
     "CAMERA CALIBRATION": {
@@ -143,14 +153,6 @@ config_info = {
         }
     },
     "SIMULATION": {
-        "bench sim preset": {
-            "help": "Misalignment-injection preset for the simulated "
-                    "bench: the priors for the camera rotation / crop "
-                    "offset / DM rotation / scale / flips that "
-                    "calibration must recover",
-            "choices": _bench_sim_presets,
-            "expert": False
-        },
         "seed": {
             "help": "Random seed for the simulated bench. None = "
                     "fresh randomness each run.",
@@ -189,6 +191,55 @@ config_info = {
         }
     }
 }
+
+# GUI header labels for config sections whose displayed name differs from
+# the .ini key. The section key stays the .ini key everywhere else
+# (run.py, spec, tests); only the form header changes.
+section_display_names = {
+    "SIMULATION": "Test WFE injection params",
+}
+
+# The ALIGNMENT section is hand-rendered by the GUI (its fields are laid
+# out together with the fitted-calibration panel), not auto-generated from
+# config_info; its display name carries the non-ASCII arrow the .ini key
+# can't (configobj is ASCII-only).
+ALIGNMENT_SECTION = "ALIGNMENT"
+ALIGNMENT_DISPLAY = "Model↔instrument alignment"
+
+# Human-facing labels for option() dropdown values, in display order. The
+# stored .ini value stays the internal token (model / oracle / ...).
+option_display_labels = {
+    ("LOOP_SETTINGS", "predictor"): [
+        ("model", "Tokyo Drift (NN)"),
+        ("oracle", "Oracle (debug)"),
+        ("random_walk", "Random walk (debug)"),
+    ],
+}
+
+
+def section_display_name(section):
+    """Header label for a config section (identity if unmapped)."""
+    return section_display_names.get(section, section)
+
+
+def section_key_from_label(label):
+    """Reverse of :func:`section_display_name` — map a form header back to
+    its .ini key so the form round-trips (identity if unmapped)."""
+    for key, shown in section_display_names.items():
+        if shown == label:
+            return key
+    return label
+
+
+def get_option_labels(section, key):
+    """Ordered ``(value, label)`` pairs for an option dropdown, or None."""
+    return option_display_labels.get((section, key))
+
+
+def is_sim_only(section, key):
+    """Whether a field is meaningful only in Sim mode (hidden on real
+    hardware)."""
+    return config_info.get(section, {}).get(key, {}).get("sim_only", False)
 
 
 def load_instruments(instrumentname, camargs={}, aoargs={}):
