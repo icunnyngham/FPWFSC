@@ -64,17 +64,34 @@ config_info = {
             "expert": True
         },
         "predictor": {
-            "help": "Wavefront-error predictor: 'oracle' (sim-only, "
-                    "reads injected truth - loop must converge) or "
-                    "'random_walk' (noise - loop must diverge). The "
-                    "trained NN predictor arrives with the model "
-                    "integration milestone.",
+            "help": "Wavefront-error predictor: 'model' (the trained NN, "
+                    "loaded from the mode's checkpoint), 'oracle' "
+                    "(sim-only, reads injected truth - loop must "
+                    "converge), or 'random_walk' (noise - loop must "
+                    "diverge).",
             "expert": False
         },
         "strehl method": {
             "help": "Strehl estimator: 'vandam' (van Dam sub-pixel "
                     "peak + aperture photometry vs the pristine "
                     "reference) or 'proxy' (peak-to-total flux ratio)",
+            "expert": True
+        }
+    },
+    "MODEL": {
+        "initial move sigma": {
+            "help": "Per-mode RMS of the diversity move applied before "
+                    "the first NN prediction (mode-coefficient units). "
+                    "Gives the model a known temporal-diversity cue to "
+                    "disambiguate sign-degenerate modes on the first "
+                    "step, matching the training eval loop. Only used by "
+                    "the 'model' predictor.",
+            "expert": True
+        },
+        "device": {
+            "help": "Torch device for NN inference: 'cpu' (default, "
+                    "matches the validated eval bench), 'mps' (Apple "
+                    "GPU), or 'cuda'.",
             "expert": True
         }
     },

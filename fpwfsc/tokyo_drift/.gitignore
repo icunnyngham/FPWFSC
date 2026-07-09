@@ -1,0 +1,7 @@
+# Trained-model checkpoints — never committed (large, machine-local).
+# The manifest 'checkpoint:' pointer is committed; the file it names is not.
+*.pt
+*.pth
+*.h5
+*.keras
+*.tf

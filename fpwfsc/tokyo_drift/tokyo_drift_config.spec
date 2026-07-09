@@ -8,8 +8,12 @@
     gain              = float(min=0)
     leak factor       = float(min=0, max=1)
     strehl early stop = float_or_none(default=None)
-    predictor         = option('oracle', 'random_walk', default='oracle')
+    predictor         = option('oracle', 'random_walk', 'model', default='oracle')
     strehl method     = option('vandam', 'proxy', default='vandam')
+
+[MODEL]
+    initial move sigma = float(min=0, default=0.01)
+    device             = string(default='cpu')
 
 [DM]
     dm channel               = string(default='dm00disp04')

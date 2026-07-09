@@ -18,7 +18,17 @@ def test_manifest_loads():
     manifest = reg.load_manifest("vampires_f760_10zern")
     assert manifest["mode"] == "vampires_f760_10zern"
     assert manifest["instrument"] == "Vampires"
-    assert manifest["checkpoint"] is None  # wired in the NN milestone
+    # A checkpoint pointer is configured (the file itself is gitignored).
+    assert manifest["checkpoint"]
+
+
+def test_checkpoint_path_errors_when_pointer_missing(tmp_path):
+    """A mode whose manifest has no checkpoint gives a clear ValueError."""
+    mode = tmp_path / "no_ckpt_mode"
+    mode.mkdir()
+    (mode / "manifest.yaml").write_text("mode: no_ckpt_mode\n")
+    with pytest.raises(ValueError, match="no checkpoint"):
+        reg.checkpoint_path("no_ckpt_mode", modes_dir=tmp_path)
 
 
 def test_unknown_mode_raises():

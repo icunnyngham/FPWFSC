@@ -42,7 +42,7 @@ class LeakyIntegrator:
 
 def run_closed_loop(take_image, send_command, predictor, translator,
                     integrator, preprocess, n_iter, *,
-                    safety=None, average=1,
+                    safety=None, average=1, initial_move=None,
                     strehl_fn=None, strehl_early_stop=None,
                     stop_event=None, plotter=None, ideal_psf=None,
                     iteration_callback=None):
@@ -68,6 +68,16 @@ def run_closed_loop(take_image, send_command, predictor, translator,
     safety
         Optional :class:`~fpwfsc.tokyo_drift.dm.DMSafetyBounds`;
         violations raise (fail loudly, never clip silently).
+    initial_move
+        Optional length-``n_modes`` diversity move applied to the DM
+        *before* the first prediction, so the first frame pair spans a
+        known actuation instead of two identical frames. Required by the
+        NN predictor (temporal diversity disambiguates sign-degenerate
+        modes); the oracle/random-walk predictors ignore actuation and
+        pass ``None`` for the current, no-initial-move behavior. The move
+        is commanded through the integrator/translator (and safety), so it
+        persists and is corrected on top of, exactly as in the training
+        eval loop.
     strehl_fn
         Optional ``callable(processed_unnormalized_frame) -> float``.
     strehl_early_stop
@@ -96,6 +106,19 @@ def run_closed_loop(take_image, send_command, predictor, translator,
     raw = take_image(average)
     prev_frame = _normalize(preprocess.process(raw, normalize=False))
     delta_actuation = np.zeros(n_modes)
+
+    # Optional diversity move before the first prediction: command it,
+    # seed the integrator state to match, and record it as the actuation
+    # between prev_frame (pre-move) and the first in-loop frame (post-move).
+    if initial_move is not None:
+        move = np.asarray(initial_move, dtype=float).reshape(n_modes)
+        integrator.state = move.copy()
+        command = translator.command_microns(integrator.state)
+        if safety is not None:
+            safety.check(command)
+        send_command(command)
+        delta_actuation = move.copy()
+
     prev_state = integrator.state.copy()
     completed = 0
 

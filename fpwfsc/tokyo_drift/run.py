@@ -54,6 +54,9 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     predictor_name = settings['LOOP_SETTINGS']['predictor']
     strehl_method = settings['LOOP_SETTINGS']['strehl method']
 
+    model_initial_move_sigma = settings['MODEL']['initial move sigma']
+    model_device = settings['MODEL']['device']
+
     max_ptv_um = settings['DM']['max peak to valley (um)']
     max_stroke_um = settings['DM']['max actuator stroke (um)']
 
@@ -190,11 +193,22 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     bench.set_modal_error(error_coeffs)
 
     integrator = LeakyIntegrator(n_modes, gain=gain, leak=leak_factor)
+    # The NN needs a known diversity move before its first prediction (two
+    # otherwise-identical frames carry no temporal cue); the dummy
+    # predictors ignore actuation, so they run with no initial move.
+    initial_move = None
     if predictor_name == 'oracle':
         predictor = CheatingOracle(
             residual_fn=lambda: error_coeffs + integrator.state, rng=rng)
     elif predictor_name == 'random_walk':
         predictor = RandomWalkPredictor(n_modes, rng=rng)
+    elif predictor_name == 'model':
+        from .model_predictor import TorchPredictor
+        predictor = TorchPredictor.from_mode(mode_name, device=model_device)
+        print(f"tokyo_drift: loaded model checkpoint "
+              f"(run {predictor.run_id}, {predictor.n_modes} modes) on "
+              f"device {model_device}")
+        initial_move = rng.normal(0.0, model_initial_move_sigma, n_modes)
     else:
         raise ValueError(f"unknown predictor {predictor_name!r}")
 
@@ -223,6 +237,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         take_image, AOsystem.set_dm_data,
         predictor, translator, integrator, preprocess, n_iter,
         safety=safety,
+        initial_move=initial_move,
         strehl_fn=strehl_fn,
         strehl_early_stop=strehl_early_stop,
         stop_event=my_event,

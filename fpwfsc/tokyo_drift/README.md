@@ -13,9 +13,10 @@ in-loop simulation, and a deliberately misaligned "bench sim" derived
 from it stands in for real hardware so that camera/DM alignment
 calibration can be exercised end-to-end without instrument time.
 
-**Status: under construction.** The entry point and config contract are
-in place; simulator backends, the GUI, calibration tooling, and NN
-inference land incrementally.
+**Status: functionally complete in sim mode.** Entry point, GUI,
+simulator backends, calibration workbench, session logging, and the
+trained-NN inference path are all in place. Real-hardware backends are
+the remaining work.
 
 ## Install
 
@@ -62,12 +63,52 @@ Calibration fits on a known asymmetric probe poke (coma + trefoil):
 a flat-wavefront PSF is centro-symmetric, so rotation and flips are
 not identifiable from a null frame.
 
+## Predictors
+
+`[LOOP_SETTINGS] predictor` selects what drives the loop:
+
+- **`model`** — the trained NN. Loaded from the mode's checkpoint (the
+  manifest `checkpoint:` pointer, resolved relative to the mode dir).
+  Checkpoints are large and **never committed** (`.gitignore`); drop the
+  converted `.pt` into the mode directory. The `.pt` is self-describing
+  (its `meta` carries the full architecture), so nothing model-specific
+  is hardcoded. Per-inference latency is printed once at loop start.
+- **`oracle`** — sim-only; reads the injected truth through a side
+  channel. The loop must converge; validates everything except the NN.
+- **`random_walk`** — pure noise; the loop must diverge (a sanity check
+  that no information is leaking).
+
+The NN model wrapper (`model_torch.py`) is vendored byte-identical from
+the validated conversion project (the same code the closed-loop eval
+bench proved framework- and sim-equivalent). Two sign conventions bridge
+the loop and the model, both pinned by tests against the training-matched
+ideal sim (where the model is near-perfect):
+
+- the prediction is the **current** wavefront error; the loop applies
+  `state = leak*state - gain*prediction` (no negation in the predictor);
+- the loop reports the actuation as a DM **command** delta
+  (`state_k - state_{k-1}`); the model was trained on the **aberration**
+  delta (`before - after`), so the adapter feeds it `-delta_actuation`.
+
+Because the NN needs temporal diversity to disambiguate sign-degenerate
+modes, the loop applies a small known **initial diversity move**
+(`[MODEL] initial move sigma`) before the first prediction — matching the
+training-time eval loop. The dummy predictors ignore actuation and run
+with no initial move.
+
+> **torch + hcipy / OpenMP:** both link an OpenMP runtime; loading torch
+> alongside hcipy aborts with a libomp double-init unless
+> `KMP_DUPLICATE_LIB_OK=TRUE` is set. The model predictor sets it
+> defensively before importing torch, so in-process CPU inference in the
+> `telescope-sim-dev` env just works.
+
 ## Config sections
 
 | Section | Purpose |
 |---|---|
 | `[MODE]` | Which trained-model mode to run (a telescope-sim config + NN checkpoint pair under `modes/`), and which saved calibration profile to apply |
-| `[LOOP_SETTINGS]` | Iterations, gain, leak factor, predictor selection, Strehl estimator (`vandam` / `proxy`), optional Strehl early-stop |
+| `[LOOP_SETTINGS]` | Iterations, gain, leak factor, predictor selection (`model` / `oracle` / `random_walk`), Strehl estimator (`vandam` / `proxy`), optional Strehl early-stop |
+| `[MODEL]` | NN inference: initial diversity-move RMS, torch device (`cpu` / `mps` / `cuda`) — used only by the `model` predictor |
 | `[DM]` | MILK shared-memory channel and command safety bounds |
 | `[SIMULATION]` | Bench-sim misalignment preset, seed, injected initial error (sim mode only) |
 | `[CAMERA CALIBRATION]` | Background / masterflat / bad-pixel FITS files (empty fields fall back to border-median background estimation) |

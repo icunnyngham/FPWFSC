@@ -3,7 +3,8 @@ instrument: Vampires
 filter: F760
 basis: 10 Zernikes (Noll 2-11, max-abs normalized, D = 7.79 m)
 ts2_config: ts2_config.yaml
-checkpoint: null    # path/URL to the trained model; wired in the NN milestone
+checkpoint: 974j9jqt_torch.pt    # trained-model file, relative to this mode
+                                 # dir (gitignored; drop the converted .pt here)
 notes: >
   Reproduces the Oct 2023 VAMPIRES F760 training configuration:
   256x256 pupil over 8.1795 m (miles_pupil SCExAO aperture,

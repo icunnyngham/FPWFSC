@@ -91,3 +91,30 @@ def load_manifest(mode_name, modes_dir=MODES_DIR):
     import yaml
     with open(path) as f:
         return yaml.safe_load(f) or {}
+
+
+def checkpoint_path(mode_name, modes_dir=MODES_DIR):
+    """Resolve the mode's trained-model checkpoint file.
+
+    The manifest ``checkpoint:`` field is a path relative to the mode
+    directory (or absolute). Checkpoints are never committed (weights are
+    large and machine-local; see the pipeline ``.gitignore``), so a clear
+    error distinguishes "no pointer configured" from "pointer set but the
+    file is missing" — the latter is the common local-setup slip.
+    """
+    manifest = load_manifest(mode_name, modes_dir)
+    ckpt = manifest.get("checkpoint")
+    if not ckpt:
+        raise ValueError(
+            f"mode {mode_name!r} has no checkpoint configured "
+            f"(manifest 'checkpoint:' is null); the 'model' predictor needs "
+            f"a trained checkpoint")
+    path = Path(ckpt)
+    if not path.is_absolute():
+        path = mode_dir(mode_name, modes_dir) / path
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"mode {mode_name!r} checkpoint not found at {path}; place the "
+            f"trained checkpoint there (checkpoints are gitignored) or fix "
+            f"the manifest 'checkpoint:' pointer")
+    return path
