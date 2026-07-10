@@ -13,6 +13,7 @@ from fpwfsc.tokyo_drift.calibration.manual import (
 )
 from fpwfsc.tokyo_drift.calibration.profiles import (
     assert_sim_safe,
+    delete_profile,
     load_profile,
     save_profile,
 )
@@ -97,6 +98,17 @@ def test_profile_save_load_round_trip(tmp_path):
 def test_load_unknown_profile_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_profile("nope", calibrations_dir=tmp_path)
+
+
+def test_delete_profile_removes_file(tmp_path):
+    pytest.importorskip("yaml")
+    save_profile("goner", {"mode": "m", "image_rot_deg": 1.0},
+                 calibrations_dir=tmp_path)
+    assert (tmp_path / "goner.yaml").is_file()
+    removed = delete_profile("goner", calibrations_dir=tmp_path)
+    assert not removed.exists()
+    with pytest.raises(FileNotFoundError):
+        delete_profile("goner", calibrations_dir=tmp_path)
 
 
 def test_sim_guard_refuses_shifts():

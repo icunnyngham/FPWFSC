@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QComboBox, QPushButton,
                              QScrollArea, QFrame, QToolButton, QSizePolicy,
                              QFileDialog, QGridLayout, QInputDialog,
-                             QMessageBox)
+                             QMessageBox, QStyle)
 from PyQt5.QtCore import (Qt, pyqtSignal, pyqtSlot, QParallelAnimationGroup,
                           QPropertyAnimation, QAbstractAnimation, QTimer,
                           QThread)
@@ -46,6 +46,7 @@ except ImportError:
 
 from fpwfsc.tokyo_drift import gui_helper as helper
 from fpwfsc.tokyo_drift.calibration.profiles import (PROFILE_DEFAULTS,
+                                                     delete_profile,
                                                      load_profile,
                                                      save_profile)
 from fpwfsc.tokyo_drift.preprocess import PreprocessImage
@@ -242,7 +243,9 @@ class TokyoDriftConfigGUI(QWidget):
 
         main_layout = QVBoxLayout(self)
 
-        # --- Top selectors: Hardware / Mode / Calibration --------------
+        # --- Top selectors: Hardware / Mode ----------------------------
+        # (Saved-config selection + the calibration actions live in the
+        # Model<->instrument alignment section below.)
         selector_layout = QGridLayout()
         selector_layout.setVerticalSpacing(2)
 
@@ -258,36 +261,6 @@ class TokyoDriftConfigGUI(QWidget):
         self.mode_select.setFixedHeight(20)
         self.mode_select.currentTextChanged.connect(self.on_mode_changed)
         selector_layout.addWidget(self.mode_select, 1, 1)
-
-        selector_layout.addWidget(QLabel("Calibration"), 2, 0)
-        self.calibration_select = QComboBox()
-        self.calibration_select.setFixedHeight(20)
-        self.calibration_select.currentTextChanged.connect(
-            self.on_calibration_selected)
-        selector_layout.addWidget(self.calibration_select, 2, 1)
-
-        self.save_calibration_button = QPushButton('Save calibration')
-        self.save_calibration_button.setFixedHeight(20)
-        self.save_calibration_button.clicked.connect(self.on_save_calibration)
-        selector_layout.addWidget(self.save_calibration_button, 2, 2)
-
-        # View: acquire + display, manual adjustment only.
-        # Auto-calibrate: full staged fit (global rotation search).
-        # Fine tune: restricted re-fit around the current field values.
-        calib_buttons = QHBoxLayout()
-        self.view_button = QPushButton('View')
-        self.view_button.clicked.connect(
-            lambda: self._start_calibration_thread('view'))
-        calib_buttons.addWidget(self.view_button)
-        self.calibrate_button = QPushButton('Auto-calibrate')
-        self.calibrate_button.clicked.connect(
-            lambda: self._start_calibration_thread('auto'))
-        calib_buttons.addWidget(self.calibrate_button)
-        self.fine_tune_button = QPushButton('Fine tune')
-        self.fine_tune_button.clicked.connect(
-            lambda: self._start_calibration_thread('fine'))
-        calib_buttons.addWidget(self.fine_tune_button)
-        selector_layout.addLayout(calib_buttons, 3, 0, 1, 3)
 
         main_layout.addLayout(selector_layout)
 
@@ -346,12 +319,10 @@ class TokyoDriftConfigGUI(QWidget):
             if key in CALIB_BOOL_FIELDS:
                 widget = QComboBox()
                 widget.addItems(['False', 'True'])
-                widget.currentTextChanged.connect(
-                    self.refresh_calibration_preview)
+                widget.currentTextChanged.connect(self._on_calib_field_edited)
             else:
                 widget = QLineEdit("")
-                widget.editingFinished.connect(
-                    self.refresh_calibration_preview)
+                widget.editingFinished.connect(self._on_calib_field_edited)
             widget.setFixedHeight(20)
             calib_layout.addWidget(label, i, 0)
             calib_layout.addWidget(widget, i, 1)
@@ -359,9 +330,55 @@ class TokyoDriftConfigGUI(QWidget):
         self.calib_box.setContentLayout(calib_layout)
         align_outer.addWidget(self.calib_box)
 
+        # Saved-config row: pick / delete / save a named calibration.
+        saved_row = QHBoxLayout()
+        saved_row.addWidget(QLabel("Saved Config"))
+        self.calibration_select = QComboBox()
+        self.calibration_select.setFixedHeight(20)
+        self.calibration_select.currentTextChanged.connect(
+            self.on_calibration_selected)
+        self.calibration_select.currentTextChanged.connect(
+            lambda _=None: self._update_delete_button_state())
+        saved_row.addWidget(self.calibration_select, 1)
+
+        self.delete_calibration_button = QPushButton()
+        self.delete_calibration_button.setIcon(
+            self.style().standardIcon(QStyle.SP_TrashIcon))
+        self.delete_calibration_button.setToolTip(
+            "Delete the selected saved config")
+        self.delete_calibration_button.setFixedSize(26, 22)
+        self.delete_calibration_button.clicked.connect(
+            self.on_delete_calibration)
+        saved_row.addWidget(self.delete_calibration_button)
+
+        self.save_calibration_button = QPushButton('Save')
+        self.save_calibration_button.setFixedHeight(22)
+        self.save_calibration_button.clicked.connect(self.on_save_calibration)
+        saved_row.addWidget(self.save_calibration_button)
+        align_outer.addLayout(saved_row)
+
+        # Calibration actions. View: acquire + display, manual adjustment
+        # only. Auto-calibrate: full staged fit (global rotation search).
+        # Fine tune: restricted re-fit around the current field values.
+        calib_buttons = QHBoxLayout()
+        self.view_button = QPushButton('View')
+        self.view_button.clicked.connect(
+            lambda: self._start_calibration_thread('view'))
+        calib_buttons.addWidget(self.view_button)
+        self.calibrate_button = QPushButton('Auto-calibrate')
+        self.calibrate_button.clicked.connect(
+            lambda: self._start_calibration_thread('auto'))
+        calib_buttons.addWidget(self.calibrate_button)
+        self.fine_tune_button = QPushButton('Fine tune')
+        self.fine_tune_button.clicked.connect(
+            lambda: self._start_calibration_thread('fine'))
+        calib_buttons.addWidget(self.fine_tune_button)
+        align_outer.addLayout(calib_buttons)
+
         main_layout.addWidget(align_frame)
         # Start from the profile defaults, not blank fields
         self._set_calibration_fields(PROFILE_DEFAULTS)
+        self._update_delete_button_state()
 
         # --- Scrollable auto-rendered config form ----------------------
         scroll = QScrollArea(self)
@@ -443,6 +460,8 @@ class TokyoDriftConfigGUI(QWidget):
         if index >= 0:
             self.calibration_select.setCurrentIndex(index)
         self.calibration_select.blockSignals(False)
+        # Signals were blocked above, so refresh the trashcan explicitly.
+        self._update_delete_button_state()
 
     def on_mode_changed(self, _mode_name):
         self.populate_calibration_selector()
@@ -488,6 +507,55 @@ class TokyoDriftConfigGUI(QWidget):
             return
         self._set_calibration_fields(profile)
         self.refresh_calibration_preview()
+
+    def _update_delete_button_state(self):
+        """The trashcan is enabled only when a named config is selected."""
+        name = self.calibration_select.currentText()
+        self.delete_calibration_button.setEnabled(bool(name) and name != 'None')
+
+    def _mark_config_unsaved(self):
+        """Point the Saved Config selector back at 'None': the displayed
+        parameters no longer match a saved profile (they were edited or
+        freshly calibrated). Signals are blocked so this does not reload."""
+        if self.calibration_select.currentText() == 'None':
+            return
+        self.calibration_select.blockSignals(True)
+        index = self.calibration_select.findText('None')
+        if index >= 0:
+            self.calibration_select.setCurrentIndex(index)
+        self.calibration_select.blockSignals(False)
+        self._update_delete_button_state()
+
+    def _on_calib_field_edited(self, *_args):
+        """A user edit to a calibration field: the parameters no longer
+        match the saved profile, so drop back to 'None' and re-preview.
+        Programmatic updates (loading a profile, streaming a fit) set
+        ``_updating_fields`` and are ignored here."""
+        if self._updating_fields:
+            return
+        self._mark_config_unsaved()
+        self.refresh_calibration_preview()
+
+    def on_delete_calibration(self):
+        """Delete the selected saved config after a confirmation prompt."""
+        name = self.calibration_select.currentText()
+        if not name or name == 'None':
+            return
+        reply = QMessageBox.question(
+            self, "Delete saved config",
+            f"Delete the saved configuration '{name}'?\n"
+            f"This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            delete_profile(name, calibrations_dir=self.calibrations_dir)
+        except FileNotFoundError as exc:
+            print(f"Delete failed: {exc}")
+        # Refresh the list (drops the deleted entry) and land on 'None'.
+        self.populate_calibration_selector(select='None')
+        self._update_delete_button_state()
+        print(f"Deleted saved config '{name}'.")
 
     # --- Calibration workbench -----------------------------------------
 
@@ -574,6 +642,8 @@ class TokyoDriftConfigGUI(QWidget):
     def on_calibration_stage(self, payload):
         print(f"Calibration stage: {payload['stage']} -> {payload['params']}")
         self._set_calibration_fields(payload['params'])
+        # A fit is producing fresh parameters -> no longer a saved config.
+        self._mark_config_unsaved()
         if self.calib_plotter is None or self.calib_plotter.closed:
             return
 

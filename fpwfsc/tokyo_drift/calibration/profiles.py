@@ -76,6 +76,17 @@ def load_profile(name_or_path, calibrations_dir=CALIBRATIONS_DIR):
     return profile
 
 
+def delete_profile(name, calibrations_dir=CALIBRATIONS_DIR):
+    """Delete a saved profile by registry name; return the removed path.
+    Raises FileNotFoundError if it does not exist."""
+    path = Path(calibrations_dir) / f"{name}.yaml"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"unknown calibration profile {name!r} (no {path})")
+    path.unlink()
+    return path
+
+
 def assert_sim_safe(profile):
     """Refuse bench-only shift fields when running against the
     simulated bench (which has no shift mechanism)."""

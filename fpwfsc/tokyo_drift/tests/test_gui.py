@@ -544,6 +544,107 @@ def test_model_availability_message(qapp):
         gui.close()
 
 
+def test_delete_button_tracks_selection(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        # 'None' selected at start -> trashcan disabled.
+        assert gui.calibration_select.currentText() == "None"
+        assert not gui.delete_calibration_button.isEnabled()
+        # A named config -> enabled.
+        gui.calibration_select.addItem("some_prof")
+        gui.calibration_select.setCurrentText("some_prof")
+        assert gui.delete_calibration_button.isEnabled()
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_delete_calibration_removes_after_confirm(qapp, tmp_path, monkeypatch):
+    import yaml
+    from PyQt5.QtWidgets import QMessageBox
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        gui.calibrations_dir = tmp_path
+        prof = tmp_path / "to_delete.yaml"
+        prof.write_text(yaml.safe_dump(
+            {"mode": "vampires_f760_10zern", "image_rot_deg": 1.0}))
+        gui.populate_calibration_selector(select="to_delete")
+        assert gui.calibration_select.currentText() == "to_delete"
+
+        # Decline -> nothing happens.
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.No)
+        gui.on_delete_calibration()
+        assert prof.exists()
+
+        # Confirm -> file gone, selector drops to None, trashcan disabled.
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.Yes)
+        gui.on_delete_calibration()
+        assert not prof.exists()
+        assert gui.calibration_select.currentText() == "None"
+        assert not gui.delete_calibration_button.isEnabled()
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_field_edit_resets_saved_config_to_none(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        gui.calibration_select.addItem("some_prof")
+        gui.calibration_select.setCurrentText("some_prof")
+        # A user edit to a calibration field.
+        gui.calib_fields["image_rot_deg"].setText("42.0")
+        gui._on_calib_field_edited()
+        assert gui.calibration_select.currentText() == "None"
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_calibration_stage_resets_saved_config_to_none(qapp):
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        gui.calibration_select.addItem("some_prof")
+        gui.calibration_select.setCurrentText("some_prof")
+        # A fit stage lands fresh parameters.
+        gui.on_calibration_stage({
+            "stage": "rotation", "params": {"image_rot_deg": 10.0},
+            "preview": None, "reference": None})
+        assert gui.calibration_select.currentText() == "None"
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
+def test_selecting_saved_config_does_not_reset(qapp, tmp_path):
+    import yaml
+    from fpwfsc.tokyo_drift.tokyo_drift_GUI import TokyoDriftConfigGUI
+
+    gui = TokyoDriftConfigGUI()
+    try:
+        gui.calibrations_dir = tmp_path
+        (tmp_path / "keepme.yaml").write_text(yaml.safe_dump(
+            {"mode": "vampires_f760_10zern", "image_rot_deg": 3.0,
+             "flip_x": True}))
+        gui.populate_calibration_selector(select="keepme")
+        # Loading the profile sets the fields but must NOT bounce to None.
+        gui.on_calibration_selected("keepme")
+        assert gui.calibration_select.currentText() == "keepme"
+    finally:
+        gui.thread_check_timer.stop()
+        gui.close()
+
+
 def test_calibration_reads_current_preset_not_stale(qapp, monkeypatch):
     """Regression: View/Auto-calibrate/Fine-tune must read the CURRENT
     form values. The preset dropdown change previously never reached the
