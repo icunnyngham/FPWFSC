@@ -1,0 +1,6 @@
+# Calibration profiles are instrument- and session-specific — and right now
+# the only ones produced are fake sim fits — so they are never committed.
+# This file keeps the (otherwise empty) directory present in the repo; the
+# user fits their own profiles here via the GUI / calibration harness.
+*.yaml
+!.gitignore
