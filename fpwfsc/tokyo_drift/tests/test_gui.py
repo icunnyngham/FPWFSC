@@ -108,6 +108,23 @@ def test_gui_module_imports_in_script_mode():
         sys.path.remove(str(PIPELINE_DIR))
 
 
+def test_no_dotted_relative_imports_in_gui():
+    """Script-mode launch has no parent package, so a dotted relative
+    import (`from .mode_registry import ...`) fails at runtime — and the
+    module-load test above can't catch ones buried in methods (they only
+    execute on a user action). Every intra-package import must be absolute
+    `fpwfsc.tokyo_drift...`; the one same-dir plotter uses the bare
+    `from . import tokyo_drift_plotter_qt` form with a try/except
+    fallback, which this pattern deliberately does not flag."""
+    import re
+    src = (PIPELINE_DIR / "tokyo_drift_GUI.py").read_text()
+    offenders = re.findall(r'^\s*from \.\w[\w.]* import.*$', src,
+                           re.MULTILINE)
+    assert offenders == [], (
+        "dotted relative imports break script-mode launch; make these "
+        f"absolute (fpwfsc.tokyo_drift...): {offenders}")
+
+
 # --- Offscreen Qt tests -------------------------------------------------
 
 @pytest.fixture(scope="module")

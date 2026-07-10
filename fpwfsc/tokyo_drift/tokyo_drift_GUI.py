@@ -453,7 +453,7 @@ class TokyoDriftConfigGUI(QWidget):
         message. Pure logic (no UI) so it can be unit-tested."""
         if not mode:
             return None
-        from .mode_registry import checkpoint_path
+        from fpwfsc.tokyo_drift.mode_registry import checkpoint_path
         try:
             checkpoint_path(mode)
             return None
