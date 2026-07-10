@@ -12,8 +12,10 @@ import numpy as np
 from .model_torch import FFModelTorch
 
 # Architecture keys carried in the self-describing checkpoint's ``meta``.
+# ``input_hw`` is absent in the earliest checkpoints (defaults to 128) and
+# 120 for the randcrop VVC model; passed through when present.
 _ARCH_KEYS = ("n_modes", "conv_channels", "conv_kernel", "n_conv",
-              "dense_size", "n_dense", "psf_channels")
+              "dense_size", "n_dense", "psf_channels", "input_hw")
 
 
 class TorchPredictor:

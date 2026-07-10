@@ -31,13 +31,25 @@ PIPELINE_DIR = Path(__file__).resolve().parents[1]
 # measured ideal-sim floor (10 modes fit near-perfectly, 35 a touch less).
 MODES = [
     {"name": "vampires_f760_10zern", "n_modes": 10, "err_rms": 0.15,
-     "min_cos": 0.99},
+     "min_cos": 0.99, "coro": False},
     # The 35-mode model fits the ideal sim a touch less tightly (measured
     # ~0.94); the flipped sign there collapses to ~-0.09, so the sign check
     # is still decisive.
     {"name": "vampires_f750_35zern", "n_modes": 35, "err_rms": 0.05,
-     "min_cos": 0.90},
+     "min_cos": 0.90, "coro": False},
+    # VVC coronagraph models (charge 4). Same FFModel family; they fit the
+    # ideal sim ~0.89 (flipped sign ~-0.07, still decisive). The 'crop'
+    # variant renders a 120px focal plane natively (model input_hw=120).
+    # NOTE: coro modes are excluded from the bench-convergence test — the
+    # loop's Strehl is only a leakage proxy for a coronagraph, and coro
+    # calibration/convergence is deferred (see MODEL_INTEGRATION_NOTES).
+    {"name": "vampires_vvc_f750_35zern", "n_modes": 35, "err_rms": 0.05,
+     "min_cos": 0.85, "coro": True},
+    {"name": "vampires_vvc_f750_35zern_crop", "n_modes": 35, "err_rms": 0.05,
+     "min_cos": 0.85, "coro": True},
 ]
+
+NONCORO_MODES = [m for m in MODES if not m["coro"]]
 
 
 def _require_checkpoint(name):
@@ -178,7 +190,7 @@ def fitted_profile_for(tmp_path_factory):
     return get
 
 
-@pytest.mark.parametrize("mode", MODES, ids=lambda m: m["name"])
+@pytest.mark.parametrize("mode", NONCORO_MODES, ids=lambda m: m["name"])
 def test_model_loop_improves_strehl(mode, fitted_profile_for):
     """The model-driven loop converges on the easy bench preset.
 

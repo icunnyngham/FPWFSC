@@ -7,13 +7,16 @@ from fpwfsc.tokyo_drift import mode_registry as reg
 
 def test_registered_modes():
     modes = reg.list_modes()
-    assert "vampires_f760_10zern" in modes
-    assert "vampires_f750_35zern" in modes
+    assert {"vampires_f760_10zern", "vampires_f750_35zern",
+            "vampires_vvc_f750_35zern",
+            "vampires_vvc_f750_35zern_crop"} <= set(modes)
 
 
 @pytest.mark.parametrize("mode,n_modes,filt", [
     ("vampires_f760_10zern", 10, "F760"),
     ("vampires_f750_35zern", 35, "F750"),
+    ("vampires_vvc_f750_35zern", 35, "F750"),
+    ("vampires_vvc_f750_35zern_crop", 35, "F750"),
 ])
 def test_mode_config_and_manifest(mode, n_modes, filt):
     assert reg.ts2_config_path(mode).is_file()
@@ -75,3 +78,19 @@ def test_vendored_pupil_matches_training_generator():
     assert pupil.size == 256 * 256
     assert pupil.min() >= 0.0 and pupil.max() <= 1.0
     assert pupil.sum() == pytest.approx(39755.09375, rel=1e-6)
+
+
+def test_vendored_synthpsf_matches_training_generator():
+    """The vendored miles_synthpsf (the coro-era pupil generator, distinct
+    from miles_pupil — it has the spider_scale arg the VVC Lyot needs) must
+    reproduce the training aperture and Lyot on the training grid."""
+    hcipy = pytest.importorskip("hcipy")
+    from fpwfsc.tokyo_drift import miles_synthpsf as ms
+
+    grid = hcipy.make_pupil_grid(256, 8.1795)
+    aperture = np.asarray(
+        ms.generate_pupil(outer=0.9835858585858586, pupil_grid=grid))
+    lyot = np.asarray(ms.generate_pupil(
+        outer=0.9, inner=0.43, scale=1.4, spider_scale=1.6, pupil_grid=grid))
+    assert aperture.sum() == pytest.approx(39628.26562, rel=1e-6)
+    assert lyot.sum() == pytest.approx(26961.79688, rel=1e-6)

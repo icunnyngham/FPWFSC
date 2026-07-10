@@ -40,9 +40,10 @@ class FFModelTorch(nn.Module):
     def __init__(self, n_modes: int = 10, conv_channels: int = 1024,
                  conv_kernel: int = 5, n_conv: int = 4,
                  dense_size: int = 2048, n_dense: int = 4,
-                 psf_channels: int = 2):
+                 psf_channels: int = 2, input_hw: int = 128):
         super().__init__()
         self.n_modes = n_modes
+        self.input_hw = input_hw
 
         # ---- conv branch (NCHW) ----
         convs = []
@@ -56,8 +57,10 @@ class FFModelTorch(nn.Module):
         # ---- dense branch ----
         # Flatten size depends on input H/W; for the canonical 128x128 input with
         # 4x (k=5,s=2,valid) it is 5*5*conv_channels = 25600. dense_4 input dim =
-        # flatten(25600) + n_modes(10) = 25610.
-        flat = self._infer_flat(psf_channels, conv_channels, conv_kernel, n_conv)
+        # flatten(25600) + n_modes(10) = 25610. For the 120x120 coro model it is
+        # 4*4*conv_channels = 16384 (pass input_hw=120).
+        flat = self._infer_flat(psf_channels, conv_channels, conv_kernel, n_conv,
+                                hw=input_hw)
         self._flat_features = flat
         in_dim = flat + n_modes
         denses = []
@@ -116,9 +119,13 @@ class FFModelTorch(nn.Module):
         sign = +1 where sigmoid(logit) >= 0.5 else -1  (bool head convention:
         final_sign_bool trained on clip(sign(err_final),0,1), i.e. 1 => positive).
         """
-        p0 = np.asarray(psf0, np.float32).reshape(128, 128, -1)
-        p1 = np.asarray(psf1, np.float32).reshape(128, 128, -1)
-        psfs = np.concatenate([p0, p1], axis=-1)  # (128,128,2)
+        p0 = np.asarray(psf0, np.float32)
+        p1 = np.asarray(psf1, np.float32)
+        if p0.ndim == 2:
+            p0 = p0[..., None]
+        if p1.ndim == 2:
+            p1 = p1[..., None]
+        psfs = np.concatenate([p0, p1], axis=-1)  # (H,W,2)
         mag, logits = self.predict_nhwc(psfs[None], np.asarray(applied_nudge)[None],
                                         device=device)
         sign = np.where(1 / (1 + np.exp(-logits)) >= 0.5, 1.0, -1.0)

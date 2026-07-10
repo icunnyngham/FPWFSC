@@ -1,0 +1,19 @@
+mode: vampires_vvc_f750_35zern
+instrument: Vampires
+filter: F750
+basis: 35 Zernikes (Noll 2-36, max-abs normalized)
+coronagraph: vector vortex, charge 4 (miles_synthpsf Lyot)
+ts2_config: ts2_config.yaml
+checkpoint: CB9WJU_torch.pt      # weights file under checkpoints/<mode>/
+                                 # (gitignored; see checkpoints/README.md)
+notes: >
+  Reproduces the May 2024 VAMPIRES vector-vortex-coronagraph (charge 4)
+  F750 training configuration (run CB9WJU~4, the clean 128px VVC
+  endpoint). The coronagraph lives in the sim, not the net — the FFModel
+  architecture is identical to the no-coro 35-mode model. 128x128 pupil
+  and focal plane; VVC charge-4 with a miles_synthpsf Lyot stop; the
+  Zernike DM diameter is the runtime auto-derived 7.9430470876 (res 128),
+  NOT the dead 7.79 fixture literal. Aperture + Lyot use the vendored
+  miles_synthpsf (fpwfsc/tokyo_drift/miles_synthpsf.py). NOTE: for a
+  coronagraph the loop's Strehl readout is only a leakage proxy, not a
+  meaningful Strehl - pupil RMS is the real convergence metric.

@@ -1,0 +1,18 @@
+mode: vampires_vvc_f750_35zern_crop
+instrument: Vampires
+filter: F750
+basis: 35 Zernikes (Noll 2-36, max-abs normalized)
+coronagraph: vector vortex, charge 4 (miles_synthpsf Lyot)
+ts2_config: ts2_config.yaml
+checkpoint: CKP8EJ_torch.pt      # weights file under checkpoints/<mode>/
+                                 # (gitignored; see checkpoints/README.md)
+notes: >
+  Reproduces the Jun 2024 VAMPIRES VVC charge-4 F750 training
+  configuration (run CKP8EJ~6, the last VVC run, trained with randcrop8 ->
+  120px input). Same VVC coronagraph + miles_synthpsf aperture/Lyot as
+  vampires_vvc_f750_35zern, but a 256 pupil grid (auto-derived Zernike
+  diameter 7.9053295407) and a 120x120 focal plane (focal_extent 0.720 =
+  120 * 6 mas/pix, a centered crop of the 128px render). The model's
+  input_hw=120 is carried in the self-describing checkpoint; no crop code
+  is needed. NOTE: for a coronagraph the loop's Strehl readout is only a
+  leakage proxy - pupil RMS is the real convergence metric.

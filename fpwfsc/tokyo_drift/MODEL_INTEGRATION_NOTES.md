@@ -6,22 +6,29 @@ now routine for same-family models. Read this before adding a new one.
 
 ## What's already integrated
 
-| mode | filter | modes | run | notes |
-|---|---|---|---|---|
-| `vampires_f760_10zern` | F760 | 10 | `974j9jqt` (2023-10) | first model; the reference |
-| `vampires_f750_35zern` | F750 | 35 | `CHP143~1` (2024-04) | nocoro baseline |
+| mode | filter | modes | optics | run | notes |
+|---|---|---|---|---|---|
+| `vampires_f760_10zern` | F760 | 10 | no coro | `974j9jqt` (2023-10) | first model; the reference |
+| `vampires_f750_35zern` | F750 | 35 | no coro | `CHP143~1` (2024-04) | nocoro baseline |
+| `vampires_vvc_f750_35zern` | F750 | 35 | VVC charge-4, 128px | `CB9WJU~4` (2024-05) | first coro model |
+| `vampires_vvc_f750_35zern_crop` | F750 | 35 | VVC charge-4, 120px | `CKP8EJ~6` (2024-06) | randcrop → 120px input |
 
-Both are the same **`FFModel` family** (two broadband PSF frames + the
+All four are the same **`FFModel` family** (two broadband PSF frames + the
 applied DM move → predicted modal wavefront error). Adding another
-same-family model is config + a checkpoint, no code.
+same-family model is config + a checkpoint, no code — even the coronagraph
+lives entirely in the TS2 sim config, not the network (see the coro section
+below for the extra config it needs).
 
 ## The pieces
 
 - **`model_torch.py`** — the PyTorch `FFModelTorch`, vendored *byte-identical*
-  (md5 `900824d721e7f24928b14ef5e2d2c29a`) from the conversion project
+  (md5 `17174a7aab59f033e342c15dc6b4fe39`) from the conversion project
   (`external/tokyo_drift_training/pytorch_conversion/model_torch.py`). It is
   self-describing: a checkpoint's `meta` carries the full architecture
-  (`n_modes`, conv/dense sizes, …), so one class loads every FFModel.
+  (`n_modes`, conv/dense sizes, `input_hw`, …), so one class loads every
+  FFModel — including the 120px crop model (`input_hw=120`). Re-vendor if the
+  upstream copy changes; `input_hw` defaults to 128 so older checkpoints are
+  unaffected.
 - **`model_predictor.py::TorchPredictor`** — wraps it as a loop predictor
   (`predict(frames, actuation) -> ndarray`). `TorchPredictor.from_mode(name)`
   resolves the checkpoint and builds the model from `meta`.
@@ -108,6 +115,44 @@ perfect); get them wrong and the loop diverges or stalls.
 
 8. **GUI** — no changes. The mode appears in the dropdown automatically; the
    NN-availability alert and checkpoint resolution already handle it.
+
+## Coronagraph (VVC) models — extra config, still no net changes
+
+The VVC models proved the coronagraph is a *sim-config* concern: same
+FFModel, the coronagraph is just added optics. What their `ts2_config.yaml`
+needs beyond the no-coro template (all from the eval bundle, which is the
+source of truth):
+
+- **A `coronagraph:` block** — `type: vector_vortex`, `charge: 4`, and a
+  `lyot:` sub-config (an `external_pupil` with its own kwargs). TS2 renders
+  this natively (the eval bundle validated TS1↔TS2 coro parity).
+- **`miles_synthpsf` aperture, not `miles_pupil`** — the coro era used a
+  different pupil generator (it has a `spider_scale` arg the Lyot needs, so
+  `miles_pupil` can't stand in). Vendored byte-identical at
+  `miles_synthpsf.py` (md5 `f6c39d2e92955d2560d25b66f1bbf7b4`; all upstream
+  copies are identical — see the model-side `DIFFS.md`). Both the aperture
+  and the Lyot reference it, with different kwargs.
+- **Auto-derived `zernike_diameter`** — the legacy coro sampler derives the
+  Zernike DM diameter at runtime (`1.01 × max pairwise aperture distance`),
+  so the fixture's `7.79` is a *dead key* that mismatches by ~8% at nonzero
+  actuation. Use the per-pupil literal from the eval bundle (7.9430470876 at
+  pupil res 128, 7.9053295407 at res 256). This is the easiest thing to get
+  silently wrong.
+- **120px crop variant**: the `_crop` model trained on a 120px centered crop.
+  A 120px focal plane at the same 6 mas/pix (`focal_res: 120`,
+  `focal_extent: 0.720`) is bit-identical to that crop, so just render 120px
+  — the whole pipeline (ideal sim, preprocess crop, model `input_hw=120`)
+  follows the focal size with no crop code.
+
+**Deferred for coro**: the closed *loop* on a coronagraph is not validated.
+Two reasons, both anticipated: (1) the loop's Strehl is only a leakage proxy
+for a coro — pupil RMS is the real metric; (2) calibration (probe-poke
+correlation) assumes a non-coronagraphic PSF morphology, so it fits less
+accurately (rot error ~4.6° vs ~2°), and the resulting loop can trip DM
+safety. The models are integrated and validated on the ideal sim (correct
+sign at both resolutions); a coro-appropriate calibration + convergence
+metric is future work. The coro modes are therefore in the sign / registry
+tests but excluded from the bench-convergence test.
 
 ## Gotchas (learned the hard way)
 

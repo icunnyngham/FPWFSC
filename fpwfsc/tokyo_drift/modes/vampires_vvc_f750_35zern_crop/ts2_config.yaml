@@ -1,0 +1,80 @@
+# VAMPIRES vector-vortex-coronagraph (charge 4), F750, 35-Zernike, 120px
+# mode — the telescope-sim configuration this mode's NN (CKP8EJ~6, 2024-06,
+# the last VVC run, trained with randcrop8 -> 120px input) was trained
+# against.
+#
+# Matched to 24-05-30_vampires_vvc_F750_35zern_randcrop8_multi_120focal.pkl
+# and the validated eval bundle
+# eval/runs/2024-06_vampires_vvc_F750_35zern_CKP8EJ/. Same VVC coronagraph
+# + miles_synthpsf aperture/Lyot as the 128px VVC mode; the differences are
+# a 256 pupil grid (so a different auto-derived zernike_diameter), 5 filter
+# samples, and a 120px focal plane.
+#
+# The model's 120x120 input is a centered crop of the 128px render. A 120px
+# focal plane at the same 6 mas/pixel scale (focal_extent 0.720 = 120 * 6mas)
+# lands on exactly the same grid points as that centered crop, so we render
+# 120px directly — no crop code; the model's input_hw=120 flows through the
+# self-describing checkpoint.
+#
+# CRITICAL: zernike_diameter is the RUNTIME auto-derived value (1.01 * max
+# pairwise aperture distance) for THIS pupil (res 256) — NOT the dead 7.79
+# fixture literal.
+
+pupil:
+  resolution: 256
+  extent: 8.1795  # 1.05 * 7.79
+
+aperture:
+  type: external_pupil
+  module: fpwfsc.tokyo_drift.miles_synthpsf
+  function: generate_pupil
+  mode: field
+  kwargs:
+    outer: 0.9835858585858586  # 7.79 / 7.92
+  area: 190.6630               # pi * 7.79^2 (matches legacy aperture_area)
+
+correctors:
+  zernike_dm:
+    type: zernike
+    n_modes: 35
+    zernike_diameter: 7.9053295407   # auto-derived (res 256); NOT the dead 7.79 literal
+    starting_mode: 2
+    actuate_scale: 1.0e-6
+    wavefront_role: actuate
+    target_strategy: actuators
+    target: true
+
+corrector_chain: [zernike_dm]
+
+coronagraph:
+  type: vector_vortex
+  charge: 4
+  lyot:
+    type: external_pupil
+    module: fpwfsc.tokyo_drift.miles_synthpsf
+    function: generate_pupil
+    mode: field
+    kwargs:
+      outer: 0.9
+      inner: 0.43
+      scale: 1.4
+      spider_scale: 1.6
+
+focal_planes:
+  filter1:
+    type: angular
+    central_lam: 0.748e-6
+    focal_extent: 0.720     # 120 px * 6 mas/pix (centered crop of the 128px/0.768 render)
+    focal_res: 120
+    fractional_bandwidth: 0.06417112299465241  # 48 nm / 748 nm
+    num_samples: 5
+
+outputs:
+  psf:
+    tap:
+      type: intensity
+      focal_planes: [filter1]
+    post_processing:
+      - type: per_sample_norm
+
+strehl_core_rad: null
