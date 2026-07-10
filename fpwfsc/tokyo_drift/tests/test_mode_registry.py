@@ -5,13 +5,36 @@ import pytest
 from fpwfsc.tokyo_drift import mode_registry as reg
 
 
-def test_vampires_f760_mode_is_registered():
-    assert "vampires_f760_10zern" in reg.list_modes()
+def test_registered_modes():
+    modes = reg.list_modes()
+    assert "vampires_f760_10zern" in modes
+    assert "vampires_f750_35zern" in modes
 
 
-def test_ts2_config_path_resolves():
-    path = reg.ts2_config_path("vampires_f760_10zern")
-    assert path.is_file()
+@pytest.mark.parametrize("mode,n_modes,filt", [
+    ("vampires_f760_10zern", 10, "F760"),
+    ("vampires_f750_35zern", 35, "F750"),
+])
+def test_mode_config_and_manifest(mode, n_modes, filt):
+    assert reg.ts2_config_path(mode).is_file()
+    assert reg.mode_n_modes(mode) == n_modes
+    manifest = reg.load_manifest(mode)
+    assert manifest["instrument"] == "Vampires"
+    assert manifest["filter"] == filt
+    assert manifest["checkpoint"]  # pointer set (file itself is gitignored)
+
+
+def test_checkpoint_resolves_under_checkpoints_dir(tmp_path):
+    """A bare manifest filename resolves to checkpoints/<mode>/<file>."""
+    modes = tmp_path / "modes"
+    (modes / "m").mkdir(parents=True)
+    (modes / "m" / "manifest.yaml").write_text(
+        "mode: m\ncheckpoint: weights.pt\n")
+    ckpts = tmp_path / "checkpoints"
+    (ckpts / "m").mkdir(parents=True)
+    (ckpts / "m" / "weights.pt").write_bytes(b"stub")
+    resolved = reg.checkpoint_path("m", modes_dir=modes, checkpoints_dir=ckpts)
+    assert resolved == ckpts / "m" / "weights.pt"
 
 
 def test_manifest_loads():

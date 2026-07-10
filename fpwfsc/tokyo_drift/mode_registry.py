@@ -18,6 +18,10 @@ from pathlib import Path
 PIPELINE_DIR = Path(__file__).resolve().parent
 MODES_DIR = PIPELINE_DIR / "modes"
 CALIBRATIONS_DIR = PIPELINE_DIR / "calibrations"
+# Trained-model weights live together here (one subdir per mode) rather
+# than beside each mode's config, so the whole tree bundles/ships as one
+# directory, independently of the repo. Gitignored; see checkpoints/README.
+CHECKPOINTS_DIR = PIPELINE_DIR / "checkpoints"
 
 
 def list_modes(modes_dir=MODES_DIR):
@@ -93,14 +97,17 @@ def load_manifest(mode_name, modes_dir=MODES_DIR):
         return yaml.safe_load(f) or {}
 
 
-def checkpoint_path(mode_name, modes_dir=MODES_DIR):
+def checkpoint_path(mode_name, modes_dir=MODES_DIR,
+                    checkpoints_dir=CHECKPOINTS_DIR):
     """Resolve the mode's trained-model checkpoint file.
 
-    The manifest ``checkpoint:`` field is a path relative to the mode
-    directory (or absolute). Checkpoints are never committed (weights are
-    large and machine-local; see the pipeline ``.gitignore``), so a clear
-    error distinguishes "no pointer configured" from "pointer set but the
-    file is missing" — the latter is the common local-setup slip.
+    The manifest ``checkpoint:`` field names the weights file; a bare name
+    resolves under ``checkpoints/<mode_name>/`` (an absolute path is honored
+    as-is). Weights live under ``checkpoints/`` rather than beside each
+    mode's config so the whole tree bundles/ships as one directory, and are
+    never committed (large, machine-local; see the pipeline ``.gitignore``).
+    A clear error distinguishes "no pointer configured" from "pointer set
+    but the file is missing" — the latter is the common local-setup slip.
     """
     manifest = load_manifest(mode_name, modes_dir)
     ckpt = manifest.get("checkpoint")
@@ -111,10 +118,10 @@ def checkpoint_path(mode_name, modes_dir=MODES_DIR):
             f"a trained checkpoint")
     path = Path(ckpt)
     if not path.is_absolute():
-        path = mode_dir(mode_name, modes_dir) / path
+        path = Path(checkpoints_dir) / mode_name / path
     if not path.is_file():
         raise FileNotFoundError(
             f"mode {mode_name!r} checkpoint not found at {path}; place the "
-            f"trained checkpoint there (checkpoints are gitignored) or fix "
-            f"the manifest 'checkpoint:' pointer")
+            f"weights under checkpoints/{mode_name}/ (checkpoints are "
+            f"gitignored) or fix the manifest 'checkpoint:' pointer")
     return path

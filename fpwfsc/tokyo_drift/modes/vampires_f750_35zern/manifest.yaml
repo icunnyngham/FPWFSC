@@ -1,0 +1,16 @@
+mode: vampires_f750_35zern
+instrument: Vampires
+filter: F750
+basis: 35 Zernikes (Noll 2-36, max-abs normalized, D = 7.79 m)
+ts2_config: ts2_config.yaml
+checkpoint: CHP143_torch.pt      # weights file under checkpoints/<mode>/
+                                 # (gitignored; see checkpoints/README.md)
+notes: >
+  Reproduces the Apr 2024 VAMPIRES F750 no-coronagraph training
+  configuration (run CHP143~1, the nocoro baseline): same 256x256 pupil
+  over 8.1795 m and 128x128 focal plane at 6 mas/pix as the F760/10z
+  mode, but a 748 nm filter with 6.42% fractional bandwidth (5 samples)
+  and a 35-mode Zernike DM. Same FFModel architecture as 974j9jqt (just
+  35 modes); the converted PyTorch checkpoint is self-describing. The
+  pupil generator is vendored byte-identical at
+  fpwfsc/tokyo_drift/miles_pupil.py.
