@@ -148,40 +148,67 @@ source of truth):
   — the whole pipeline (ideal sim, preprocess crop, model `input_hw=120`)
   follows the focal size with no crop code.
 
-### Coro closed loop — why it diverges on the bench (investigated 2026-07-11)
+### Coro closed loop on the bench — diagnosed and (mostly) fixed (2026-07-11)
 
-The coro models validate on the ideal sim (correct sign) but **diverge in
-closed loop on the actuator-grid bench**, even at 0.001 rms. What the
-investigation found (oracle-vs-model, controlled ablations):
+The coro models validate on the ideal sim (correct sign) but **diverged in
+closed loop on the actuator-grid bench**, even at 0.001 rms. A first
+investigation blamed a fundamental actuator-grid-vs-Zernike wavefront
+mismatch; a same-day follow-up **overturned that** with controlled
+experiments. Two independent causes, neither fundamental:
 
-- The **oracle converges** on the coro bench → the loop, calibration, and DM
-  commanding all work. It's the **model mispredicting on the bench coro
-  PSF** — a coronagraph's speckle field (the signal the model reads) is
-  hypersensitive to the bench's deliberate mismatches, where a non-coro core
-  is robust (the no-coro model tolerates the same bench and converges).
-- **Ruled out**: rotation error (4.6° only drops the model 0.89→0.865),
-  pupil extent (8.18 vs 8.65 → no change), photon starvation (noiseless ≈
-  noisy).
-- **The actuator-grid DM is the barrier, not calibration.** Forcing the true
-  rotation and sweeping dm_scale (1.1–1.6) still diverges. Two contributing
-  DM issues found and understood: (a) `TranslationDM` used a hardcoded 7.79
-  Zernike diameter vs the coro modes' ~7.94 — **fixed** (now reads
-  `mode_zernike_diameter`); (b) the coro `dm_scale` calibration is
-  unreliable (fits ~1.1 vs the true ~1.5 overshoot) because the coro PSF
-  responds nonlinearly to the probe amplitude, so the scale sweep misreads.
-  Neither fully fixes it — the residual actuator-grid-vs-Zernike wavefront
-  mismatch alone is enough to defeat the speckle-sensitive coro model.
-- **A Zernike-DM ideal bench works** (no actuator grid, no mangling — the way
-  the eval bench runs): `vampires_vvc_f750_35zern_crop` converges cleanly
-  (0.093 → 0.010). That's the right way to run/verify a coro loop in
-  distribution; a packaged in-GUI version is not built yet (manual-loop
-  proof only). On the **real** bench the DM and coronagraph *are* the
-  training system, so this sim-only OOD gap shouldn't exist.
-- Don't read the coro loop's Strehl regardless — it's a leakage proxy; pupil
-  RMS / the true modal residual is the convergence signal.
+1. **Single-frame noise** (the actual divergence driver). `run()` calls
+   `run_closed_loop` with `average=1`; a coro frame is faint speckle, and
+   photon+read noise on a single min-max-normalized frame corrupts the NN
+   input enough to diverge the loop *even with a perfect calibration
+   profile*. `average>=4-8` fixes it (noiseless → 0.016 residual;
+   average=4 → 0.019; average=1 → diverges to 0.30+). This is why every
+   earlier dm_scale sweep "still diverged", and why smaller injected
+   errors diverge *harder* (dimmer speckle signal, same noise). The
+   earlier "noise ruled out" was a single-step-cosine test — it doesn't
+   capture the closed-loop compounding. The bright no-coro core has the
+   SNR to tolerate average=1. **An averaging/exposure config in the loop
+   is still TODO** — until it lands, the coro mode stays excluded from
+   the bench-convergence test.
+2. **Command amplitude: the effective DM gain is ~1.6-1.7, and the old
+   calibration missed it unreliably.** The influence functions render a
+   smooth commanded Zernike surface ~1.6x larger than the commanded poke
+   amplitudes (per-mode 1.43-2.31 across 35 modes; a property of the
+   nominal DM, same physics as the real bench's empirical 1.4e-6 vs 1e-6
+   nominal `dm_actuate_scale`). At the *correct* scalar, bench-vs-ideal
+   frames at the same modal state match at cosine 0.998+ **even through
+   the VVC** (the ~12% high-order influence-function print-through is
+   invisible in the PSF, and a full 35x35 modal-inverse correction buys
+   nothing over the scalar). Calibration used to compare bench pokes
+   against ideal references rendered at the *commanded* amplitude — 1.6x
+   apart in aberration strength, where coro frames decorrelate to cosine
+   ~0.3 — degrading the rotation/center fits and biasing `fit_dm_scale`
+   toward ~1.0 on some seeds. **Fixed (gain-aware calibration)**:
+   `calibration/dm_gain.py::nominal_dm_gain` precomputes the nominal
+   overshoot from the DM model (spec-sheet knowledge, not injected
+   truth); `acquire_probe` renders every reference at the gain-matched
+   amplitude and the `dm_scale` sweep centers on the nominal gain. Coro
+   recovery went from bimodal (scale fits of ~1.0 or ~1.6, rotation
+   errors 3.6-5.6°) to tight (over-truth 1.66-1.74, rotation 0.2-2.7°
+   across seeds).
 
-The coro mode is therefore in the sign / registry tests but **excluded from
-the bench-convergence test**.
+With both in place (fitted profile + `average=8` wired manually), the
+`_crop` coro model **converges on the mangled easy bench**: 0.104 →
+0.013-0.018 across seeds, matching the ideal Zernike-DM bench floor.
+Related knock-on understanding:
+
+- With gain-matched references, the rotation fit locks onto the probe
+  response's full orientation and **partially absorbs the (v1-unfitted)
+  DM rotation** into image rotation — the camera-to-DM alignment the loop
+  wants, but it inflates the report's pure-image-rotation "error" by up
+  to |dm_rot| (see the realistic-preset test).
+- The border-median background fallback in frame reduction subtracts
+  real coro halo flux and adds stripe noise on lightly averaged frames —
+  now **off by default** (`estimate background from border`).
+- Don't read the coro loop's Strehl regardless — it's a leakage proxy;
+  pupil RMS / the true modal residual is the convergence signal.
+- A Zernike-DM ideal bench (no actuator grid, no mangling) also converges
+  (0.093 → 0.010) and remains a useful in-distribution diagnostic tier,
+  but is no longer needed as a workaround.
 
 ## Gotchas (learned the hard way)
 

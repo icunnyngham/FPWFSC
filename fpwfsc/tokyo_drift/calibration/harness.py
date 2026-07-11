@@ -14,6 +14,7 @@ from ..mode_registry import load_ts2_config, mode_n_modes, mode_zernike_diameter
 from ..sim import BenchSim, IdealSim
 from ..sim.bench_sim import DM_NOMINAL_SCALE
 from ..preprocess import PreprocessImage
+from .dm_gain import nominal_dm_gain
 from .manual import (
     fit_center,
     fit_dm_scale,
@@ -41,9 +42,17 @@ def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
     """Build the sims (or reuse the given ones), poke the calibration
     probe, and acquire the frames every calibration path starts from.
 
+    The ideal reference is rendered at ``probe * nominal_dm_gain`` — the
+    wavefront amplitude the nominal bench DM actually produces for the
+    commanded probe (the influence-function overshoot, ~1.6; see
+    :mod:`.dm_gain`) — so bench frame and reference are compared at
+    matched aberration strength. Comparing at the *commanded* amplitude
+    decorrelates coronagraphic frames almost completely and degrades
+    every downstream fit.
+
     Returns a context dict: ``bench, ideal, raw, reference, probe,
-    probe_amplitude, corrector, n_modes, crop_res``. Also what the
-    GUI's View action displays before any fitting happens.
+    probe_amplitude, nominal_gain, corrector, n_modes, crop_res``. Also
+    what the GUI's View action displays before any fitting happens.
     """
     if bench is None:
         bench = BenchSim.from_mode(mode_name, preset=preset, seed=seed)
@@ -51,6 +60,7 @@ def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
         ideal = IdealSim.from_mode(mode_name)
     n_modes = mode_n_modes(mode_name)
     corrector = load_ts2_config(mode_name)["corrector_chain"][0]
+    gain = nominal_dm_gain(mode_name)
 
     probe = probe_coefficients(n_modes, amplitude=probe_amplitude)
     translator = TranslationDM(n_modes=n_modes,
@@ -61,11 +71,12 @@ def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
                for i, c in enumerate(probe) if c}
     print(f"tokyo_drift calibration probe: {nonzero} "
           f"(amplitude {probe_amplitude}) -> "
-          f"{np.max(np.abs(command)):.3f} um surface peak commanded")
+          f"{np.max(np.abs(command)):.3f} um surface peak commanded; "
+          f"reference rendered at x{gain:.3f} (nominal DM gain)")
     bench.set_dm_data(command)
     raw = bench.take_image(average=average)
     bench.set_dm_data(translator.command_microns(np.zeros(n_modes)))
-    reference = np.asarray(ideal.psf({corrector: probe}))
+    reference = np.asarray(ideal.psf({corrector: probe * gain}))
 
     return {
         "bench": bench,
@@ -74,6 +85,7 @@ def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
         "reference": reference,
         "probe": probe,
         "probe_amplitude": probe_amplitude,
+        "nominal_gain": gain,
         "corrector": corrector,
         "n_modes": n_modes,
         "crop_res": reference.shape[0],
@@ -193,12 +205,18 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
         center_x=center["crop_cx"], center_y=center["crop_cy"],
         flip_horizontal=flips["flip_x"], flip_vertical=flips["flip_y"],
         verbose=False)
-    scale_grid = None
     if around is not None:
         current_scale = float(around.get("dm_scale", 1.0)) or 1.0
         scale_grid = np.geomspace(current_scale * (1.0 - scale_halfwidth),
                                   current_scale * (1.0 + scale_halfwidth),
                                   21)
+    else:
+        # Centered on the nominal DM gain: the fitted dm_scale is the
+        # TOTAL effective command->wavefront gain (nominal influence
+        # overshoot x any true actuation-scale error), so the sweep
+        # spans ~0.45-2.2x truth error around the nominal (the stress
+        # preset's prior is 0.5-2.0x).
+        scale_grid = ctx["nominal_gain"] * np.geomspace(0.45, 2.2, 25)
     scale = fit_dm_scale(preprocess.process(raw, normalize=True),
                          ideal_psf_fn, probe, scale_grid=scale_grid)
     params["dm_scale"] = scale["dm_scale"]
@@ -225,14 +243,13 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
 
     # --- recovery report (the ONLY place truth is read) ---------------
     # NOTE on dm_scale: the fit measures the EFFECTIVE command->
-    # wavefront gain, which includes the actuator influence-function
-    # crosstalk overshoot (a smooth commanded surface renders ~1.2-1.5x
-    # larger) on top of the injected truth scale. That is the quantity
-    # the loop needs — the same physics the real bench absorbed into
-    # dm_actuate_scale (1.4e-6 against a 1e-6 nominal). The ratio
-    # therefore sits ABOVE truth by the influence gain; it is reported
-    # raw, and the meaningful regression gate is loop convergence with
-    # the fitted profile.
+    # wavefront gain — the nominal influence-function overshoot
+    # (``nominal_dm_gain``, ~1.6) times the injected truth scale. That
+    # is the quantity the loop needs — the same physics the real bench
+    # absorbed into dm_actuate_scale (1.4e-6 against a 1e-6 nominal).
+    # ``dm_scale_over_truth`` should therefore recover ~nominal_dm_gain;
+    # the meaningful regression gate is loop convergence with the
+    # fitted profile.
     truth = bench.truth
     expected_rot = (-truth["image_rot_deg"]) % 360.0
     report = {
@@ -257,6 +274,7 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
         "reference_psf": np.asarray(ref),
         "probe_coefficients": probe,
         "probe_amplitude": ctx["probe_amplitude"],
+        "nominal_dm_gain": ctx["nominal_gain"],
         "corrector": corrector,
     }
     return profile, report

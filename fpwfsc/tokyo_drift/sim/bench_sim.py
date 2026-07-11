@@ -39,6 +39,11 @@ PRESETS_DIR = Path(__file__).resolve().parents[1] / "bench_sim_presets"
 # SCExAO 2k DM geometry: 50x50 actuators at 0.17 m pupil-projected pitch.
 DM_NUM_ACTUATORS = 50
 DM_PITCH_M = 0.17
+# Influence-function model of the simulated bench DM (shared with the
+# calibration-side nominal-gain computation, which must model the SAME
+# nominal DM; see calibration/dm_gain.py).
+DM_INFLUENCE = "gaussian"
+DM_CROSSTALK = 0.15
 # Commands are in microns of surface (the bench SHM convention); the
 # nominal command-to-meters factor an *un*-miscalibrated DM would have.
 DM_NOMINAL_SCALE = 1.0e-6
@@ -114,8 +119,8 @@ def derive_bench_config(base_config, truth, render_res=512,
             "type": "actuator_grid",
             "num_actuators": int(num_actuators),
             "actuator_pitch": float(actuator_pitch),
-            "influence": "gaussian",
-            "crosstalk": 0.15,
+            "influence": DM_INFLUENCE,
+            "crosstalk": DM_CROSSTALK,
             "rotation_deg": float(truth["dm_rot_deg"]),
             "flip_x": bool(truth["dm_flip_x"]),
             "flip_y": bool(truth["dm_flip_y"]),
