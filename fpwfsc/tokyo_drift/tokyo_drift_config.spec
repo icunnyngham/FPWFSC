@@ -36,6 +36,12 @@
     background file = string(default='')
     masterflat file = string(default='')
     badpix file     = string(default='')
+    # With no background file, optionally synthesize one from the frame's
+    # border rows/columns. Off by default: the NN was trained on
+    # unsubtracted min-max-normalized frames, and on faint coronagraphic
+    # frames the border estimate subtracts real halo flux and injects
+    # correlated stripe noise.
+    estimate background from border = boolean(default=False)
 
 [IO]
     save_log        = boolean(default=False)

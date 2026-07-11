@@ -133,6 +133,16 @@ config_info = {
                     "skip bad pixel correction.",
             "file": True,
             "expert": True
+        },
+        "estimate background from border": {
+            "help": "With no background file: synthesize a background "
+                    "from the frame's border rows/columns and subtract "
+                    "it. Off by default - the NN was trained on "
+                    "unsubtracted frames, and on faint coronagraphic "
+                    "frames the border estimate subtracts real halo "
+                    "flux and adds correlated stripe noise. Ignored "
+                    "when a background file is set.",
+            "expert": False
         }
     },
     "DM": {

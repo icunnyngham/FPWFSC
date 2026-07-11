@@ -19,6 +19,34 @@ import numpy as np
 from ..common import support_functions as sf
 
 
+def make_frame_reducer(bgds, estimate_background_from_border):
+    """Build the raw-frame reduction callable (background / flat / bad
+    pixels).
+
+    ``bgds`` holds the loaded calibration arrays (any of which may be
+    None). When no background frame is configured,
+    ``estimate_background_from_border`` chooses between
+    ``equalize_image``'s border-median fallback (True) and no background
+    subtraction at all (False, the default): the NN was trained on
+    unsubtracted min-max-normalized frames, and on faint coronagraphic
+    frames the border estimate subtracts real halo flux and injects
+    correlated stripe noise.
+    """
+    def reduce(frame):
+        for name, arr in bgds.items():
+            if arr is not None and arr.shape != frame.shape:
+                raise ValueError(
+                    f"calibration file {name!r} has shape {arr.shape} but "
+                    f"the camera frame is {frame.shape}")
+        bkgd = bgds['bkgd']
+        if bkgd is None and not estimate_background_from_border:
+            bkgd = 0.0
+        return sf.equalize_image(frame, bkgd=bkgd,
+                                 masterflat=bgds['masterflat'],
+                                 badpix=bgds['badpix'])
+    return reduce
+
+
 def run(camera=None, aosystem=None, config=None, configspec=None,
         my_event=None, plotter=None):
     """Run the Tokyo Drift control loop.
@@ -72,6 +100,8 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         'badpix': sf.load_fits_or_none(
             settings['CAMERA CALIBRATION']['badpix file']),
     }
+    estimate_border = settings['CAMERA CALIBRATION'][
+        'estimate background from border']
 
     save_log = settings['IO']['save_log']
     log_path = settings['IO']['log_path']
@@ -145,16 +175,9 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     )
 
     # Frame reduction (background / flat / bad pixels), matching the
-    # other pipelines' reduce-before-use convention. With no
-    # calibration files configured, equalize_image falls back to
-    # border-median background estimation.
-    def reduce(frame):
-        for name, arr in bgds.items():
-            if arr is not None and arr.shape != frame.shape:
-                raise ValueError(
-                    f"calibration file {name!r} has shape {arr.shape} but "
-                    f"the camera frame is {frame.shape}")
-        return sf.equalize_image(frame, **bgds)
+    # other pipelines' reduce-before-use convention (see
+    # make_frame_reducer for the border-estimation policy).
+    reduce = make_frame_reducer(bgds, estimate_border)
 
     if hitchhiker_mode:
         from ..common import fake_hardware as fhw
