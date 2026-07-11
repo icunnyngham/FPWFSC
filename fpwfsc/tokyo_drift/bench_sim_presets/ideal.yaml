@@ -1,0 +1,16 @@
+name: ideal
+description: >
+  No misalignment - every injection parameter is zero. For verifying that
+  the model + closed loop actually run in-distribution, especially for the
+  coronagraph modes, where the mangled presets push the (speckle-field-
+  sensitive) coro model out of distribution and the loop diverges. The
+  bench DM is still the actuator_grid, so its effective-gain calibration
+  (dm_scale ~1.5-1.8) still applies - but there is no camera rotation,
+  crop offset, DM rotation, scale error, or flip. Use this to isolate
+  model/loop-wiring problems from alignment-mismatch problems.
+image_rotation_deg: {min: 0.0, max: 0.0}
+dm_rotation_deg: {min: 0.0, max: 0.0}
+crop_offset_px: {min: 0, max: 0}
+dm_scale: {min: 1.0, max: 1.0}
+dm_flip_x_probability: 0.0
+dm_flip_y_probability: 0.0

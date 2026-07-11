@@ -10,7 +10,7 @@ before any calibration change ships, and it is what the GUI's
 import numpy as np
 
 from ..dm import TranslationDM
-from ..mode_registry import load_ts2_config, mode_n_modes
+from ..mode_registry import load_ts2_config, mode_n_modes, mode_zernike_diameter
 from ..sim import BenchSim, IdealSim
 from ..sim.bench_sim import DM_NOMINAL_SCALE
 from ..preprocess import PreprocessImage
@@ -54,7 +54,8 @@ def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
 
     probe = probe_coefficients(n_modes, amplitude=probe_amplitude)
     translator = TranslationDM(n_modes=n_modes,
-                               dm_actuate_scale=DM_NOMINAL_SCALE)
+                               dm_actuate_scale=DM_NOMINAL_SCALE,
+                               zernike_diameter=mode_zernike_diameter(mode_name))
     command = translator.command_microns(probe)
     nonzero = {f"mode[{i}] (Noll {i + 2})": round(float(c), 3)
                for i, c in enumerate(probe) if c}

@@ -27,6 +27,17 @@ def test_mode_config_and_manifest(mode, n_modes, filt):
     assert manifest["checkpoint"]  # pointer set (file itself is gitignored)
 
 
+def test_mode_zernike_diameter():
+    """The TranslationDM must command modes on the same basis diameter the
+    sim renders on. No-coro modes use 7.79; the coro modes use the runtime
+    auto-derived value (~7.9), so this must not be hardcoded."""
+    assert reg.mode_zernike_diameter("vampires_f760_10zern") == pytest.approx(7.79)
+    assert reg.mode_zernike_diameter(
+        "vampires_vvc_f750_35zern") == pytest.approx(7.9430470876)
+    assert reg.mode_zernike_diameter(
+        "vampires_vvc_f750_35zern_crop") == pytest.approx(7.9053295407)
+
+
 def test_checkpoint_resolves_under_checkpoints_dir(tmp_path):
     """A bare manifest filename resolves to checkpoints/<mode>/<file>."""
     modes = tmp_path / "modes"

@@ -87,6 +87,20 @@ def mode_n_modes(mode_name, modes_dir=MODES_DIR):
     return int(cfg["correctors"][first]["n_modes"])
 
 
+def mode_zernike_diameter(mode_name, modes_dir=MODES_DIR):
+    """The Zernike-basis diameter of the mode's (first) corrector.
+
+    The TranslationDM must build its command basis on this same diameter,
+    or it commands modes on a different-sized basis than the sim renders
+    the wavefront on — a structural mismatch that is negligible for a
+    non-coronagraphic core but corrupts a coronagraph's speckle field. The
+    coro modes use the runtime auto-derived diameter (~7.9), not 7.79.
+    """
+    cfg = load_ts2_config(mode_name, modes_dir)
+    first = cfg["corrector_chain"][0]
+    return float(cfg["correctors"][first]["zernike_diameter"])
+
+
 def load_manifest(mode_name, modes_dir=MODES_DIR):
     """The mode's manifest.yaml as a dict ({} if absent)."""
     path = mode_dir(mode_name, modes_dir) / "manifest.yaml"

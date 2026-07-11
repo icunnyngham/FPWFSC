@@ -94,7 +94,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     # ------------------------------------------------------------------
     from .dm import DMSafetyBounds, TranslationDM
     from .loop import LeakyIntegrator, peak_flux_ratio, run_closed_loop
-    from .mode_registry import mode_n_modes
+    from .mode_registry import mode_n_modes, mode_zernike_diameter
     from .predictors import CheatingOracle, RandomWalkPredictor
     from .preprocess import PreprocessImage
     from .sim import BenchSim, BenchSimAO, BenchSimCamera, IdealSim
@@ -133,6 +133,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         dm_rot_deg=profile["dm_rot_deg"] or None,
         flip_horizontal=profile["dm_flip_x"],
         flip_vertical=profile["dm_flip_y"],
+        zernike_diameter=mode_zernike_diameter(mode_name),
     )
     preprocess = PreprocessImage(
         crop_res=ideal.reference_psf.shape[0],
