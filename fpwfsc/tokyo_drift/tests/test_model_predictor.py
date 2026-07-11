@@ -37,14 +37,12 @@ MODES = [
     # is still decisive.
     {"name": "vampires_f750_35zern", "n_modes": 35, "err_rms": 0.05,
      "min_cos": 0.90, "coro": False},
-    # VVC coronagraph models (charge 4). Same FFModel family; they fit the
-    # ideal sim ~0.89 (flipped sign ~-0.07, still decisive). The 'crop'
-    # variant renders a 120px focal plane natively (model input_hw=120).
-    # NOTE: coro modes are excluded from the bench-convergence test — the
-    # loop's Strehl is only a leakage proxy for a coronagraph, and coro
-    # calibration/convergence is deferred (see MODEL_INTEGRATION_NOTES).
-    {"name": "vampires_vvc_f750_35zern", "n_modes": 35, "err_rms": 0.05,
-     "min_cos": 0.85, "coro": True},
+    # VVC coronagraph model (charge 4). Same FFModel family; fits the ideal
+    # sim ~0.89 (flipped sign ~-0.07, still decisive) and renders a 120px
+    # focal plane natively (model input_hw=120). NOTE: coro modes are
+    # excluded from the bench-convergence test — the loop's Strehl is only a
+    # leakage proxy for a coronagraph, and the actuator-grid bench can't run
+    # the coro loop (see MODEL_INTEGRATION_NOTES).
     {"name": "vampires_vvc_f750_35zern_crop", "n_modes": 35, "err_rms": 0.05,
      "min_cos": 0.85, "coro": True},
 ]

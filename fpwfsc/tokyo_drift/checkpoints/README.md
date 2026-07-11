@@ -8,7 +8,6 @@ checkpoints/
 ├── README.md                                   (committed)
 ├── vampires_f760_10zern/974j9jqt_torch.pt      (gitignored)
 ├── vampires_f750_35zern/CHP143_torch.pt        (gitignored)
-├── vampires_vvc_f750_35zern/CB9WJU_torch.pt    (gitignored)
 └── vampires_vvc_f750_35zern_crop/CKP8EJ_torch.pt (gitignored)
 ```
 
@@ -41,10 +40,12 @@ carries the real weights.
 |---|---|---|---|---|---|---|---|
 | `vampires_f760_10zern` | `974j9jqt_torch.pt` | `974j9jqt` (2023-10) | F760 | 10 | no coro, 128px | `.h5`/`.keras`/`.tf` | `final_mag` max-abs 7e-7, 100% sign |
 | `vampires_f750_35zern` | `CHP143_torch.pt` | `CHP143~1` (2024-04) | F750 | 35 | no coro, 128px | `.tf` (TF 2.14) | `final_mag` max-abs 7e-7, 100% sign |
-| `vampires_vvc_f750_35zern` | `CB9WJU_torch.pt` | `CB9WJU~4` (2024-05) | F750 | 35 | VVC charge-4, 128px | `.tf` (TF 2.14) | `final_mag` max-abs 8e-7, 100% sign |
 | `vampires_vvc_f750_35zern_crop` | `CKP8EJ_torch.pt` | `CKP8EJ~6` (2024-06) | F750 | 35 | VVC charge-4, 120px | `.tf` (TF 2.14) | `final_mag` max-abs 8e-7, 100% sign |
 
-All four are the same `FFModel` family (see `../model_torch.py`); the `.pt`
+(The 128px VVC model `CB9WJU~4` was integrated then dropped — it diverges
+in closed loop even on its own ideal sim; see `../MODEL_INTEGRATION_NOTES.md`.)
+
+All three are the same `FFModel` family (see `../model_torch.py`); the `.pt`
 is self-describing (`meta` carries the full architecture — including
 `input_hw`, 120 for the crop model — plus this provenance). The VVC models
 put the coronagraph in the optical sim, not the network.

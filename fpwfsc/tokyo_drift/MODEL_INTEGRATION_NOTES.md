@@ -10,10 +10,14 @@ now routine for same-family models. Read this before adding a new one.
 |---|---|---|---|---|---|
 | `vampires_f760_10zern` | F760 | 10 | no coro | `974j9jqt` (2023-10) | first model; the reference |
 | `vampires_f750_35zern` | F750 | 35 | no coro | `CHP143~1` (2024-04) | nocoro baseline |
-| `vampires_vvc_f750_35zern` | F750 | 35 | VVC charge-4, 128px | `CB9WJU~4` (2024-05) | first coro model |
 | `vampires_vvc_f750_35zern_crop` | F750 | 35 | VVC charge-4, 120px | `CKP8EJ~6` (2024-06) | randcrop → 120px input |
 
-All four are the same **`FFModel` family** (two broadband PSF frames + the
+(A 128px VVC model, `CB9WJU~4`, was integrated then **dropped** — it
+diverges in closed loop even on its own ideal Zernike-DM sim, at every gain,
+while `CKP8EJ~6` converges there cleanly. A model-specific issue, not a
+config one; re-add if it's understood. See the coro section.)
+
+All three are the same **`FFModel` family** (two broadband PSF frames + the
 applied DM move → predicted modal wavefront error). Adding another
 same-family model is config + a checkpoint, no code — even the coronagraph
 lives entirely in the TS2 sim config, not the network (see the coro section
@@ -144,15 +148,40 @@ source of truth):
   — the whole pipeline (ideal sim, preprocess crop, model `input_hw=120`)
   follows the focal size with no crop code.
 
-**Deferred for coro**: the closed *loop* on a coronagraph is not validated.
-Two reasons, both anticipated: (1) the loop's Strehl is only a leakage proxy
-for a coro — pupil RMS is the real metric; (2) calibration (probe-poke
-correlation) assumes a non-coronagraphic PSF morphology, so it fits less
-accurately (rot error ~4.6° vs ~2°), and the resulting loop can trip DM
-safety. The models are integrated and validated on the ideal sim (correct
-sign at both resolutions); a coro-appropriate calibration + convergence
-metric is future work. The coro modes are therefore in the sign / registry
-tests but excluded from the bench-convergence test.
+### Coro closed loop — why it diverges on the bench (investigated 2026-07-11)
+
+The coro models validate on the ideal sim (correct sign) but **diverge in
+closed loop on the actuator-grid bench**, even at 0.001 rms. What the
+investigation found (oracle-vs-model, controlled ablations):
+
+- The **oracle converges** on the coro bench → the loop, calibration, and DM
+  commanding all work. It's the **model mispredicting on the bench coro
+  PSF** — a coronagraph's speckle field (the signal the model reads) is
+  hypersensitive to the bench's deliberate mismatches, where a non-coro core
+  is robust (the no-coro model tolerates the same bench and converges).
+- **Ruled out**: rotation error (4.6° only drops the model 0.89→0.865),
+  pupil extent (8.18 vs 8.65 → no change), photon starvation (noiseless ≈
+  noisy).
+- **The actuator-grid DM is the barrier, not calibration.** Forcing the true
+  rotation and sweeping dm_scale (1.1–1.6) still diverges. Two contributing
+  DM issues found and understood: (a) `TranslationDM` used a hardcoded 7.79
+  Zernike diameter vs the coro modes' ~7.94 — **fixed** (now reads
+  `mode_zernike_diameter`); (b) the coro `dm_scale` calibration is
+  unreliable (fits ~1.1 vs the true ~1.5 overshoot) because the coro PSF
+  responds nonlinearly to the probe amplitude, so the scale sweep misreads.
+  Neither fully fixes it — the residual actuator-grid-vs-Zernike wavefront
+  mismatch alone is enough to defeat the speckle-sensitive coro model.
+- **A Zernike-DM ideal bench works** (no actuator grid, no mangling — the way
+  the eval bench runs): `vampires_vvc_f750_35zern_crop` converges cleanly
+  (0.093 → 0.010). That's the right way to run/verify a coro loop in
+  distribution; a packaged in-GUI version is not built yet (manual-loop
+  proof only). On the **real** bench the DM and coronagraph *are* the
+  training system, so this sim-only OOD gap shouldn't exist.
+- Don't read the coro loop's Strehl regardless — it's a leakage proxy; pupil
+  RMS / the true modal residual is the convergence signal.
+
+The coro mode is therefore in the sign / registry tests but **excluded from
+the bench-convergence test**.
 
 ## Gotchas (learned the hard way)
 

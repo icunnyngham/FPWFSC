@@ -8,14 +8,12 @@ from fpwfsc.tokyo_drift import mode_registry as reg
 def test_registered_modes():
     modes = reg.list_modes()
     assert {"vampires_f760_10zern", "vampires_f750_35zern",
-            "vampires_vvc_f750_35zern",
             "vampires_vvc_f750_35zern_crop"} <= set(modes)
 
 
 @pytest.mark.parametrize("mode,n_modes,filt", [
     ("vampires_f760_10zern", 10, "F760"),
     ("vampires_f750_35zern", 35, "F750"),
-    ("vampires_vvc_f750_35zern", 35, "F750"),
     ("vampires_vvc_f750_35zern_crop", 35, "F750"),
 ])
 def test_mode_config_and_manifest(mode, n_modes, filt):
@@ -32,8 +30,6 @@ def test_mode_zernike_diameter():
     sim renders on. No-coro modes use 7.79; the coro modes use the runtime
     auto-derived value (~7.9), so this must not be hardcoded."""
     assert reg.mode_zernike_diameter("vampires_f760_10zern") == pytest.approx(7.79)
-    assert reg.mode_zernike_diameter(
-        "vampires_vvc_f750_35zern") == pytest.approx(7.9430470876)
     assert reg.mode_zernike_diameter(
         "vampires_vvc_f750_35zern_crop") == pytest.approx(7.9053295407)
 
