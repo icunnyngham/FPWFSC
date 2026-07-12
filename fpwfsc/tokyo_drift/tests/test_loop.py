@@ -17,8 +17,13 @@ SIM_INI = str(PIPELINE_DIR / "tokyo_drift_config_sim.ini")
 
 
 def _sim_config(**overrides):
-    """The shipped sim ini with LOOP_SETTINGS/SIMULATION overrides."""
+    """The shipped sim ini with LOOP_SETTINGS/SIMULATION overrides.
+
+    Pins the injected-WFE episode ('wfe seed', shipped default None =
+    fresh error each GUI run) so loop outcomes are reproducible in tests.
+    """
     cfg = ConfigObj(SIM_INI)
+    cfg["SIMULATION"]["wfe seed"] = "27"
     for dotted, value in overrides.items():
         section, key = dotted.split(".", 1)
         cfg[section][key] = value

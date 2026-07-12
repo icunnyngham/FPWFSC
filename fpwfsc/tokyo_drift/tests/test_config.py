@@ -32,6 +32,9 @@ def test_spec_coerces_types():
     assert settings["MODE"]["calibration profile"] is None
     assert settings["LOOP_SETTINGS"]["strehl early stop"] is None
     assert settings["SIMULATION"]["seed"] == 27
+    # The injected-WFE episode is unseeded by default: fresh error each
+    # GUI run against the same (seed-pinned) bench. Tests pin it.
+    assert settings["SIMULATION"]["wfe seed"] is None
     # SNR section: sim source brightness (10^x) + frame averaging (used
     # by both the loop and calibration; default 8 so the coronagraph
     # modes work out of the box at the training-era flux)

@@ -190,8 +190,19 @@ config_info = {
     },
     "SIMULATION": {
         "seed": {
-            "help": "Random seed for the simulated bench. None = "
-                    "fresh randomness each run.",
+            "help": "Random seed for the simulated BENCH: the drawn "
+                    "misalignment truth and the detector noise stream. "
+                    "Keep it fixed so a saved calibration stays valid "
+                    "across runs; None redraws the bench (and its "
+                    "misalignments) every run.",
+            "expert": True
+        },
+        "wfe seed": {
+            "help": "Random seed for the injected-WFE episode: the "
+                    "hidden error draw and the model's initial "
+                    "diversity move. None (default) = a fresh injected "
+                    "error each run against the same bench; set an "
+                    "integer for a reproducible episode (tests do).",
             "expert": True
         },
         "initial error rms": {

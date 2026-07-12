@@ -90,6 +90,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
 
     preset_name = settings['ALIGNMENT']['bench sim preset']
     seed = settings['SIMULATION']['seed']
+    wfe_seed = settings['SIMULATION']['wfe seed']
     initial_error_rms = settings['SIMULATION']['initial error rms']
 
     flux_exponent = settings['SNR']['int phot flux exponent']
@@ -133,7 +134,12 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     from .sim import BenchSim, BenchSimAO, BenchSimCamera, IdealSim
     from .sim.bench_sim import DM_NOMINAL_SCALE
 
-    rng = np.random.default_rng(seed)
+    # Two seeds, two owners: `seed` pins the BENCH (misalignment truth +
+    # detector noise), so a saved calibration stays valid run to run;
+    # `wfe_seed` pins the injected-WFE episode (the error draw + the
+    # model's initial diversity move). The default None gives each run a
+    # fresh injected error against the same bench.
+    rng = np.random.default_rng(wfe_seed)
     n_modes = mode_n_modes(mode_name)
 
     ideal = IdealSim.from_mode(mode_name)

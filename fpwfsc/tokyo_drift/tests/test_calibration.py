@@ -293,6 +293,7 @@ def test_fitted_profile_drives_converging_loop(easy_recovery, tmp_path):
     cfg["MODE"]["calibration profile"] = str(path)
     cfg["LOOP_SETTINGS"]["N iter"] = 12
     cfg["LOOP_SETTINGS"]["strehl early stop"] = 0.9
+    cfg["SIMULATION"]["wfe seed"] = "27"     # pin the injected episode
     result = run("Sim", "Sim", config=cfg, configspec=SPEC)
     strehls = result["loop"]["strehls"]
     assert np.nanmax(strehls) >= 0.9

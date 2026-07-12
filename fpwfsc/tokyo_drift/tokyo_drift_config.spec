@@ -38,9 +38,15 @@
     int phot flux exponent = float(default=3.5)
     frames to average      = integer(min=1, default=8)
 
-# Displayed as "Test WFE injection params".
+# Displayed as "Test WFE injection params". Two seeds, two owners:
+# 'seed' pins the BENCH (misalignment truth + detector noise) so a
+# saved calibration stays valid across runs; 'wfe seed' pins the
+# injected-WFE episode (error draw + the model's initial diversity
+# move). The None default gives a fresh injected error every run
+# against the same bench; tests set an integer for reproducibility.
 [SIMULATION]
     seed              = integer_or_none(default=None)
+    wfe seed          = integer_or_none(default=None)
     initial error rms = float(min=0, default=0.15)
 
 [CAMERA CALIBRATION]

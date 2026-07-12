@@ -208,6 +208,7 @@ def test_model_loop_improves_strehl(mode, fitted_profile_for):
     cfg["LOOP_SETTINGS"]["predictor"] = "model"
     cfg["LOOP_SETTINGS"]["N iter"] = 12
     cfg["SIMULATION"]["initial error rms"] = str(mode["err_rms"])
+    cfg["SIMULATION"]["wfe seed"] = "27"     # pin the injected episode
     cfg["MODE"]["calibration profile"] = fitted_profile_for(mode["name"])
     result = run("Sim", "Sim", config=cfg,
                  configspec=str(PIPELINE_DIR / "tokyo_drift_config.spec"))
@@ -244,6 +245,7 @@ def test_coro_model_loop_converges_modal_residual(fitted_profile_for):
     cfg["LOOP_SETTINGS"]["N iter"] = 10
     cfg["LOOP_SETTINGS"]["strehl early stop"] = "None"
     cfg["SIMULATION"]["initial error rms"] = "0.02"
+    cfg["SIMULATION"]["wfe seed"] = "27"     # pin the injected episode
     cfg["SNR"]["frames to average"] = "8"
     cfg["MODE"]["calibration profile"] = fitted_profile_for(mode["name"])
     result = run("Sim", "Sim", config=cfg,
