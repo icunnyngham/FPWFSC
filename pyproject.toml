@@ -24,8 +24,9 @@ dependencies = [
 
 [project.optional-dependencies]
 tokyo-drift = [
-    "telescope-sim",
+    "telescope-sim>=2.1",  # actuator_grid DM corrector (bench sim) needs 2.1.0+
     "torch",
+    "pyyaml",              # mode registry / calibration profiles / presets
 ]
 
 [project.urls]
