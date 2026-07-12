@@ -92,7 +92,7 @@ class CalibrationThread(QThread):
 
     def __init__(self, mode_name, preset, seed, task='auto', around=None,
                  bench=None, ideal=None, probe_amplitude=0.3,
-                 int_phot_flux=None):
+                 int_phot_flux=None, average=8):
         super().__init__()
         self.mode_name = mode_name
         self.preset = preset
@@ -103,6 +103,7 @@ class CalibrationThread(QThread):
         self.ideal = ideal
         self.probe_amplitude = probe_amplitude
         self.int_phot_flux = int_phot_flux
+        self.average = average
 
     def run(self):
         try:
@@ -122,13 +123,14 @@ class CalibrationThread(QThread):
 
             if self.task == 'view':
                 ctx = acquire_probe(self.mode_name, bench=bench,
-                                    ideal=ideal,
+                                    ideal=ideal, average=self.average,
                                     probe_amplitude=self.probe_amplitude)
                 self.view_ready.emit(ctx)
                 return
 
             profile, report = calibrate_bench_sim(
                 self.mode_name, bench=bench, ideal=ideal,
+                average=self.average,
                 stage_callback=self.stage_update.emit,
                 around=self.around if self.task == 'fine' else None,
                 probe_amplitude=self.probe_amplitude)
@@ -606,9 +608,11 @@ class TokyoDriftConfigGUI(QWidget):
             self.config['ALIGNMENT']['probe amplitude'])
         self._current_probe_amplitude = probe_amplitude
         # Calibration frames must come from the same camera the loop
-        # will see, so the bench sim gets the configured source flux.
+        # will see, so the bench sim gets the configured source flux and
+        # the probe exposures use the configured frame averaging.
         int_phot_flux = 10.0 ** float(
             self.config['SNR']['int phot flux exponent'])
+        frames_to_average = int(self.config['SNR']['frames to average'])
 
         # Reuse the built sims only while mode/preset/seed/flux are unchanged
         context_key = (mode, preset, seed, int_phot_flux)
@@ -620,7 +624,7 @@ class TokyoDriftConfigGUI(QWidget):
         self.calibration_thread = CalibrationThread(
             mode, preset, seed, task=task, around=around,
             bench=bench, ideal=ideal, probe_amplitude=probe_amplitude,
-            int_phot_flux=int_phot_flux)
+            int_phot_flux=int_phot_flux, average=frames_to_average)
         self.calibration_thread.stage_update.connect(self.on_calibration_stage)
         self.calibration_thread.view_ready.connect(self.on_view_ready)
         self.calibration_thread.calibration_done.connect(self.on_calibration_done)

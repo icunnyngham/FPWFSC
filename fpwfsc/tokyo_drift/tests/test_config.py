@@ -32,9 +32,11 @@ def test_spec_coerces_types():
     assert settings["MODE"]["calibration profile"] is None
     assert settings["LOOP_SETTINGS"]["strehl early stop"] is None
     assert settings["SIMULATION"]["seed"] == 27
-    # SNR section: sim source brightness (10^x) + per-iteration averaging
+    # SNR section: sim source brightness (10^x) + frame averaging (used
+    # by both the loop and calibration; default 8 so the coronagraph
+    # modes work out of the box at the training-era flux)
     assert settings["SNR"]["int phot flux exponent"] == 3.5
-    assert settings["SNR"]["frames to average"] == 1
+    assert settings["SNR"]["frames to average"] == 8
 
 
 def test_border_background_estimation_defaults_off(tmp_path):

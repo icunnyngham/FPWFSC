@@ -28,13 +28,15 @@
     probe amplitude  = float(min=0, default=0.3)
 
 # Displayed as "Noise mitigation". Two SNR levers: simulated source
-# brightness (sim-only) and per-iteration frame averaging (all
-# backends; the camera's own capture averaging, no pipeline-side
-# infrastructure). Coronagraphic modes read a faint speckle field and
-# need materially more SNR than the bright no-coro core.
+# brightness (sim-only) and frame averaging (all backends; the camera's
+# own capture averaging, no pipeline-side infrastructure). Both the
+# loop and the calibration probes respect these. Coronagraphic modes
+# read a faint speckle field and need materially more SNR than the
+# bright no-coro core; the default averaging is chosen so calibration
+# and the coro loop both work at the training-era flux.
 [SNR]
     int phot flux exponent = float(default=3.5)
-    frames to average      = integer(min=1, default=1)
+    frames to average      = integer(min=1, default=8)
 
 # Displayed as "Test WFE injection params".
 [SIMULATION]

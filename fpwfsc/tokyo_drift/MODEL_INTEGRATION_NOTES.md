@@ -173,7 +173,11 @@ experiments. Two independent causes, neither fundamental:
    photons/m^2, legacy notation; training-era default 3.5) sets the
    bench-sim source brightness — measured coro thresholds on the easy
    bench: 10^4.0 converges at single frames, or average>=4-8 at 10^3.5.
-   The coro mode now has its own modal-residual bench-convergence test.
+   Both the loop AND the calibration probes respect the panel; the
+   default averaging is 8, so the coro loop converges out of the box
+   (calibration recovery is insensitive to averaging from ~4 up —
+   grid-quantized fits). The coro mode now has its own modal-residual
+   bench-convergence test.
 2. **Command amplitude: the effective DM gain is ~1.6-1.7, and the old
    calibration missed it unreliably.** The influence functions render a
    smooth commanded Zernike surface ~1.6x larger than the commanded poke

@@ -174,13 +174,17 @@ config_info = {
             "expert": False
         },
         "frames to average": {
-            "help": "Frames averaged per loop iteration, passed straight "
-                    "to the camera's take_image(average=N) - no "
-                    "pipeline-side infrastructure. In sim this draws N "
-                    "noise realizations of one rendered frame (cheap). "
-                    "CAUTION on VAMPIRES hardware: the current upstream "
-                    "class treats any value != 1 as a hardcoded 50-frame "
-                    "mean (see PENDING_VAMPIRES_INTEGRATION_NOTES).",
+            "help": "Frames averaged per exposure, passed straight to "
+                    "the camera's take_image(average=N) - no "
+                    "pipeline-side infrastructure. Used by both the "
+                    "closed loop and the calibration probes. In sim this "
+                    "draws N noise realizations of one rendered frame "
+                    "(cheap). Default 8: enough for the coronagraph loop "
+                    "at the training-era flux; calibration quality is "
+                    "insensitive from ~4 up. CAUTION on VAMPIRES "
+                    "hardware: the current upstream class treats any "
+                    "value != 1 as a hardcoded 50-frame mean (see "
+                    "PENDING_VAMPIRES_INTEGRATION_NOTES).",
             "expert": False
         }
     },

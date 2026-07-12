@@ -37,7 +37,7 @@ DEFAULT_PROBE_AMPLITUDE = 0.3
 
 
 def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
-                  ideal=None, average=16,
+                  ideal=None, average=8,
                   probe_amplitude=DEFAULT_PROBE_AMPLITUDE):
     """Build the sims (or reuse the given ones), poke the calibration
     probe, and acquire the frames every calibration path starts from.
@@ -93,7 +93,7 @@ def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
 
 
 def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
-                        average=16, coarse_step=2.0, bench=None,
+                        average=8, coarse_step=2.0, bench=None,
                         ideal=None, stage_callback=None, around=None,
                         rot_halfwidth=5.0, rot_step=0.1,
                         scale_halfwidth=0.25,
