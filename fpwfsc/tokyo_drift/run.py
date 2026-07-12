@@ -92,6 +92,9 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     seed = settings['SIMULATION']['seed']
     initial_error_rms = settings['SIMULATION']['initial error rms']
 
+    flux_exponent = settings['SNR']['int phot flux exponent']
+    frames_to_average = settings['SNR']['frames to average']
+
     bgds = {
         'bkgd': sf.load_fits_or_none(
             settings['CAMERA CALIBRATION']['background file']),
@@ -134,7 +137,8 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     n_modes = mode_n_modes(mode_name)
 
     ideal = IdealSim.from_mode(mode_name)
-    bench = BenchSim.from_mode(mode_name, preset=preset_name, seed=seed)
+    bench = BenchSim.from_mode(mode_name, preset=preset_name, seed=seed,
+                               int_phot_flux=10.0 ** flux_exponent)
     Camera = BenchSimCamera(bench)
     AOsystem = BenchSimAO(bench)
     truth = bench.truth
@@ -261,6 +265,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         take_image, AOsystem.set_dm_data,
         predictor, translator, integrator, preprocess, n_iter,
         safety=safety,
+        average=frames_to_average,
         initial_move=initial_move,
         strehl_fn=strehl_fn,
         strehl_early_stop=strehl_early_stop,

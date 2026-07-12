@@ -166,9 +166,14 @@ experiments. Two independent causes, neither fundamental:
    errors diverge *harder* (dimmer speckle signal, same noise). The
    earlier "noise ruled out" was a single-step-cosine test — it doesn't
    capture the closed-loop compounding. The bright no-coro core has the
-   SNR to tolerate average=1. **An averaging/exposure config in the loop
-   is still TODO** — until it lands, the coro mode stays excluded from
-   the bench-convergence test.
+   SNR to tolerate average=1. **Fixed via the `[SNR]` config section**
+   ("Noise mitigation" in the GUI): `frames to average` passes straight
+   to `take_image(average=N)` (in sim: N noise draws of ONE rendered
+   frame, nearly free), and `int phot flux exponent` (sim-only, 10^x
+   photons/m^2, legacy notation; training-era default 3.5) sets the
+   bench-sim source brightness — measured coro thresholds on the easy
+   bench: 10^4.0 converges at single frames, or average>=4-8 at 10^3.5.
+   The coro mode now has its own modal-residual bench-convergence test.
 2. **Command amplitude: the effective DM gain is ~1.6-1.7, and the old
    calibration missed it unreliably.** The influence functions render a
    smooth commanded Zernike surface ~1.6x larger than the commanded poke

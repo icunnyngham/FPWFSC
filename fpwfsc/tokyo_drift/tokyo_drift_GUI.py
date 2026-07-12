@@ -91,7 +91,8 @@ class CalibrationThread(QThread):
     calibration_failed = pyqtSignal(str)
 
     def __init__(self, mode_name, preset, seed, task='auto', around=None,
-                 bench=None, ideal=None, probe_amplitude=0.3):
+                 bench=None, ideal=None, probe_amplitude=0.3,
+                 int_phot_flux=None):
         super().__init__()
         self.mode_name = mode_name
         self.preset = preset
@@ -101,6 +102,7 @@ class CalibrationThread(QThread):
         self.bench = bench
         self.ideal = ideal
         self.probe_amplitude = probe_amplitude
+        self.int_phot_flux = int_phot_flux
 
     def run(self):
         try:
@@ -110,8 +112,12 @@ class CalibrationThread(QThread):
             )
             from fpwfsc.tokyo_drift.sim import BenchSim, IdealSim
 
+            bench_kwargs = {}
+            if self.int_phot_flux is not None:
+                bench_kwargs["int_phot_flux"] = self.int_phot_flux
             bench = self.bench or BenchSim.from_mode(
-                self.mode_name, preset=self.preset, seed=self.seed)
+                self.mode_name, preset=self.preset, seed=self.seed,
+                **bench_kwargs)
             ideal = self.ideal or IdealSim.from_mode(self.mode_name)
 
             if self.task == 'view':
@@ -599,9 +605,13 @@ class TokyoDriftConfigGUI(QWidget):
         probe_amplitude = float(
             self.config['ALIGNMENT']['probe amplitude'])
         self._current_probe_amplitude = probe_amplitude
+        # Calibration frames must come from the same camera the loop
+        # will see, so the bench sim gets the configured source flux.
+        int_phot_flux = 10.0 ** float(
+            self.config['SNR']['int phot flux exponent'])
 
-        # Reuse the built sims only while mode/preset/seed are unchanged
-        context_key = (mode, preset, seed)
+        # Reuse the built sims only while mode/preset/seed/flux are unchanged
+        context_key = (mode, preset, seed, int_phot_flux)
         bench = ideal = None
         if context_key == getattr(self, '_calib_context_key', None):
             bench, ideal = self.calib_bench, self.calib_ideal
@@ -609,7 +619,8 @@ class TokyoDriftConfigGUI(QWidget):
 
         self.calibration_thread = CalibrationThread(
             mode, preset, seed, task=task, around=around,
-            bench=bench, ideal=ideal, probe_amplitude=probe_amplitude)
+            bench=bench, ideal=ideal, probe_amplitude=probe_amplitude,
+            int_phot_flux=int_phot_flux)
         self.calibration_thread.stage_update.connect(self.on_calibration_stage)
         self.calibration_thread.view_ready.connect(self.on_view_ready)
         self.calibration_thread.calibration_done.connect(self.on_calibration_done)

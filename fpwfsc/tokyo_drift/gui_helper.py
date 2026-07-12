@@ -162,6 +162,28 @@ config_info = {
             "expert": True
         }
     },
+    "SNR": {
+        "int phot flux exponent": {
+            "help": "Simulated source brightness: 10^x photons/m^2 per "
+                    "integration (legacy sim notation; 3.5 = ~3162, the "
+                    "training-era value). Raise it to beat shot noise in "
+                    "sim - a coronagraph's faint speckle field needs "
+                    "materially more SNR than a bright no-coro core. "
+                    "Sim-only (real brightness is the sky's business).",
+            "sim_only": True,
+            "expert": False
+        },
+        "frames to average": {
+            "help": "Frames averaged per loop iteration, passed straight "
+                    "to the camera's take_image(average=N) - no "
+                    "pipeline-side infrastructure. In sim this draws N "
+                    "noise realizations of one rendered frame (cheap). "
+                    "CAUTION on VAMPIRES hardware: the current upstream "
+                    "class treats any value != 1 as a hardcoded 50-frame "
+                    "mean (see PENDING_VAMPIRES_INTEGRATION_NOTES).",
+            "expert": False
+        }
+    },
     "SIMULATION": {
         "seed": {
             "help": "Random seed for the simulated bench. None = "
@@ -206,6 +228,7 @@ config_info = {
 # the .ini key. The section key stays the .ini key everywhere else
 # (run.py, spec, tests); only the form header changes.
 section_display_names = {
+    "SNR": "Noise mitigation",
     "SIMULATION": "Test WFE injection params",
 }
 

@@ -39,10 +39,9 @@ MODES = [
      "min_cos": 0.90, "coro": False},
     # VVC coronagraph model (charge 4). Same FFModel family; fits the ideal
     # sim ~0.89 (flipped sign ~-0.07, still decisive) and renders a 120px
-    # focal plane natively (model input_hw=120). NOTE: coro modes are
-    # excluded from the bench-convergence test — the loop's Strehl is only a
-    # leakage proxy for a coronagraph, and the actuator-grid bench can't run
-    # the coro loop (see MODEL_INTEGRATION_NOTES).
+    # focal plane natively (model input_hw=120). Excluded from the
+    # Strehl-gated convergence test (coro Strehl is only a leakage proxy);
+    # it has its own modal-residual convergence test below.
     {"name": "vampires_vvc_f750_35zern_crop", "n_modes": 35, "err_rms": 0.05,
      "min_cos": 0.85, "coro": True},
 ]
@@ -219,3 +218,40 @@ def test_model_loop_improves_strehl(mode, fitted_profile_for):
     # Measured (seed 27, easy): 10z reaches ~1.03, 35z ~0.96-0.99. Floor
     # pinned well below; bench-vs-training mismatch caps the ceiling.
     assert valid.max() > 0.85
+
+
+def test_coro_model_loop_converges_modal_residual(fitted_profile_for):
+    """The VVC model closes the loop on the actuator-grid bench.
+
+    End-to-end regression for the 2026-07 coro-divergence work: this
+    needs the gain-aware calibration (dm_scale ~1.7, not ~1.0) AND SNR
+    mitigation — a coronagraph's faint speckle field diverges the model
+    on single noisy frames at the training-era flux, so the loop runs
+    with frame averaging (the sim-flux knob works equally; see
+    MODEL_INTEGRATION_NOTES). Gated on the true modal residual
+    ``||err + state||``; coro Strehl is only a leakage proxy.
+    """
+    pytest.importorskip("torch")
+    mode = next(m for m in MODES if m["coro"])
+    _require_checkpoint(mode["name"])
+    from configobj import ConfigObj
+
+    from fpwfsc.tokyo_drift.run import run
+
+    cfg = ConfigObj(str(PIPELINE_DIR / "tokyo_drift_config_sim.ini"))
+    cfg["MODE"]["mode name"] = mode["name"]
+    cfg["LOOP_SETTINGS"]["predictor"] = "model"
+    cfg["LOOP_SETTINGS"]["N iter"] = 10
+    cfg["LOOP_SETTINGS"]["strehl early stop"] = "None"
+    cfg["SIMULATION"]["initial error rms"] = "0.02"
+    cfg["SNR"]["frames to average"] = "8"
+    cfg["MODE"]["calibration profile"] = fitted_profile_for(mode["name"])
+    result = run("Sim", "Sim", config=cfg,
+                 configspec=str(PIPELINE_DIR / "tokyo_drift_config.spec"))
+
+    err = result["injected_error_coeffs"]
+    residuals = [float(np.linalg.norm(err + s))
+                 for s in result["loop"]["states"]]
+    assert np.linalg.norm(err) > 0.08            # starts aberrated
+    assert min(residuals) < 0.03                 # converges (measured ~0.014)
+    assert residuals[-1] < 0.04                  # and stays converged

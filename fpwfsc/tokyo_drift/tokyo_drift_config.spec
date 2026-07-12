@@ -27,6 +27,15 @@
     bench sim preset = string(default='easy')
     probe amplitude  = float(min=0, default=0.3)
 
+# Displayed as "Noise mitigation". Two SNR levers: simulated source
+# brightness (sim-only) and per-iteration frame averaging (all
+# backends; the camera's own capture averaging, no pipeline-side
+# infrastructure). Coronagraphic modes read a faint speckle field and
+# need materially more SNR than the bright no-coro core.
+[SNR]
+    int phot flux exponent = float(default=3.5)
+    frames to average      = integer(min=1, default=1)
+
 # Displayed as "Test WFE injection params".
 [SIMULATION]
     seed              = integer_or_none(default=None)
