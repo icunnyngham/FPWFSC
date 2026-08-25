@@ -56,19 +56,27 @@ def save_profile(name, profile, calibrations_dir=CALIBRATIONS_DIR):
     return path
 
 
+def resolve_profile_path(name_or_path, calibrations_dir=CALIBRATIONS_DIR):
+    """The YAML file behind a profile reference: a direct path passes
+    through, a registry name resolves under ``calibrations_dir``. Also
+    what the session logger copies for provenance — the config may hold
+    either form."""
+    candidate = Path(str(name_or_path))
+    if candidate.suffix == ".yaml" and candidate.is_file():
+        return candidate
+    path = Path(calibrations_dir) / f"{name_or_path}.yaml"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"unknown calibration profile {name_or_path!r} "
+            f"(no {path})")
+    return path
+
+
 def load_profile(name_or_path, calibrations_dir=CALIBRATIONS_DIR):
     """Load a profile by registry name, or by direct path to a YAML
     file (scripted runs / tests). Missing fields get defaults."""
     import yaml
-    candidate = Path(str(name_or_path))
-    if candidate.suffix == ".yaml" and candidate.is_file():
-        path = candidate
-    else:
-        path = Path(calibrations_dir) / f"{name_or_path}.yaml"
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"unknown calibration profile {name_or_path!r} "
-                f"(no {path})")
+    path = resolve_profile_path(name_or_path, calibrations_dir)
     with open(path) as f:
         data = yaml.safe_load(f) or {}
     profile = dict(PROFILE_DEFAULTS)

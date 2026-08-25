@@ -343,3 +343,42 @@ Mechanics and safeguards:
 crew alongside the correction channel (2024 sessions used
 dm00disp02/04/08; pick a free one, e.g. dm00disp06), set it in the
 config, and run preflight — it now checks that stream too.
+
+## Pre-bench code review findings (2026-08-24 night)
+
+Full review of the hardware code path + the Apr 2024 notebook ahead of
+the bench run. Methodology cross-check: the 2024 sessions injected via
+`set_dm_act(err)` then `set_dm_act(err - correction)` — DM-borne, same
+modal draw, err and correction summed in software on ONE channel; the
+new injection path sums the same two terms across two DMcomb channels
+instead (physically identical surface, loop can't overwrite the
+injection, everything logged). Bench amplitudes used in 2024:
+err_sig 0.001-0.1.
+
+Three fixes from the review:
+1. **Stale guard removed**: `_start_calibration_thread` still opened
+   with "real-hardware calibration is not wired yet; select 'Sim'" —
+   left over from before HardwareBench landed, it dead-coded the entire
+   hardware calibration wiring sitting right below it. Auto-calibrate
+   on the bench would have refused. GONE.
+2. **Profile-by-NAME provenance crash**: running with a profile
+   selected by registry name (the normal GUI flow after saving a
+   calibration) crashed at logger setup — save_provenance copyfile'd
+   the raw reference. Now resolved via profiles.resolve_profile_path.
+   Never seen before because every logged run to date used a
+   path-referenced (tempfile) profile.
+3. **Calibration probes now safety-bounded**: HardwareBench.set_dm_data
+   checks DMSafetyBounds built from the [DM] limits (GUI wires it).
+   Measured probe commands: amplitude 0.3 -> 0.28 um stroke / 0.55 PtV;
+   the coarse rotation probe (1.0) -> 0.93 stroke / 1.86 PtV — inside
+   the 1.0/2.0 limits with ~7% margin (expect the near-limit WARNING
+   print during the coarse stage; it is informative, not a problem).
+   A typo'd probe amplitude is now refused instead of sent.
+
+Verified clean in the same review: every calibration poke zeroes the DM
+right after its frames (acquire_probe); image-side fits reuse acquired
+frames (no extra pokes); GUI passes `dm channel` into SCEXAO on
+connect; SIMULATION fields (rms / n repeats / injection channel) stay
+visible in hardware mode; filter gate matches 'F750' vs '750-50' by
+leading number; VVC `_crop` mode manifest+checkpoint deploy-ready
+(120px input self-described; Strehl = leakage proxy only).

@@ -437,11 +437,15 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
                 logger = SessionLogger(log_path, settings=settings,
                                        session_name=session_name)
                 # The profile and the subtracted background travel with the
-                # log: config.json holds the profile only by path (possibly
-                # a GUI tempfile), and the dark's shm buffer gets
-                # overwritten.
-                logger.save_provenance(profile_path=calibration_profile,
-                                       background=bgds['bkgd'])
+                # log: config.json holds the profile only by reference
+                # (a registry NAME from the GUI dropdown, or a path —
+                # possibly a GUI tempfile), and the dark's shm buffer
+                # gets overwritten. Resolve the reference to its file
+                # before copying.
+                from .calibration.profiles import resolve_profile_path
+                logger.save_provenance(
+                    profile_path=resolve_profile_path(calibration_profile),
+                    background=bgds['bkgd'])
                 logger.save_episode(episode=episode, n_repeats=n_repeats,
                                     injected_error_coeffs=error_coeffs,
                                     initial_move=initial_move,

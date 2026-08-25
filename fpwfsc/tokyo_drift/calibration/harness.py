@@ -45,14 +45,24 @@ class HardwareBench:
 
     NOTE: unlike preflight, calibration DOES send DM commands (the
     probe pokes); use it only when you have the bench.
+
+    ``safety`` (a :class:`~fpwfsc.tokyo_drift.dm.DMSafetyBounds`) is
+    checked on every outgoing command: the loop refuses over-limit
+    commands, so probes — which reach ~93% of the default stroke limit
+    at the coarse amplitude of 1.0 — must not be allowed to silently
+    exceed what the loop itself would refuse (a typo'd probe amplitude
+    otherwise goes straight to the bench unchecked).
     """
 
-    def __init__(self, camera, aosystem, reduce=None):
+    def __init__(self, camera, aosystem, reduce=None, safety=None):
         self.camera = camera
         self.aosystem = aosystem
         self._reduce = reduce if reduce is not None else (lambda f: f)
+        self._safety = safety
 
     def set_dm_data(self, command):
+        if self._safety is not None:
+            self._safety.check(command)
         return self.aosystem.set_dm_data(command)
 
     def take_image(self, average=1):

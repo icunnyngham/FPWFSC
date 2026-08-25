@@ -261,6 +261,53 @@ def test_refused_injection_aborts_episode_and_zeros(hardware_profile):
     np.testing.assert_array_equal(injector.commands[0], np.zeros((50, 50)))
 
 
+def test_run_with_profile_by_registry_name_logs_provenance(
+        hardware_profile, tmp_path):
+    """The bench flow: a profile SAVED via the GUI is referenced by
+    registry NAME, not path - the run (and its provenance copy) must
+    resolve it. Regression: save_provenance used to copyfile the raw
+    reference and crashed on names."""
+    pytest.importorskip("telescope_sim")
+    import yaml
+    from fpwfsc.tokyo_drift.calibration.profiles import (delete_profile,
+                                                         save_profile)
+    from fpwfsc.tokyo_drift.run import run
+
+    with open(hardware_profile) as f:
+        profile_dict = yaml.safe_load(f)
+    name = "pytest_bench_name_resolution"
+    save_profile(name, profile_dict)
+    try:
+        cfg = _hw_config(hardware_profile,
+                         **{"MODE.calibration profile": name,
+                            "LOOP_SETTINGS.N iter": "1",
+                            "IO.save_log": "True",
+                            "IO.log_path": str(tmp_path)})
+        run(FakeVampires(), FakeSCEXAO(), config=cfg, configspec=SPEC)
+        session, = tmp_path.glob("tokyo_drift_*")
+        copied = yaml.safe_load(
+            (session / "calibration_profile.yaml").read_text())
+        assert copied["dm_scale"] == profile_dict["dm_scale"]
+    finally:
+        delete_profile(name)
+
+
+def test_hardware_bench_probes_respect_safety_bounds():
+    """Calibration pokes on real hardware pass through DMSafetyBounds:
+    an over-limit probe (typo'd amplitude) is refused, not sent."""
+    from fpwfsc.tokyo_drift.calibration.harness import HardwareBench
+    from fpwfsc.tokyo_drift.dm import DMSafetyBounds, DMSafetyError
+
+    cam, ao = FakeVampires(), FakeSCEXAO()
+    bench = HardwareBench(cam, ao, safety=DMSafetyBounds(
+        max_ptv_um=2.0, max_stroke_um=1.0))
+    bench.set_dm_data(np.full((50, 50), 0.5))     # in bounds: sent
+    assert len(ao.commands) == 1
+    with pytest.raises(DMSafetyError):
+        bench.set_dm_data(np.full((50, 50), 3.0))  # over stroke: refused
+    assert len(ao.commands) == 1
+
+
 def test_hardware_branch_refuses_wrong_filter(hardware_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run

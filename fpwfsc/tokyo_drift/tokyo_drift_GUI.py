@@ -607,10 +607,6 @@ class TokyoDriftConfigGUI(QWidget):
                            else busy_label)
 
     def _start_calibration_thread(self, task):
-        if self.hardware_select.currentText() != 'Sim':
-            print("Calibration: real-hardware calibration is not wired "
-                  "yet; select 'Sim'.")
-            return
         around = None
         if task == 'fine':
             try:
@@ -659,12 +655,17 @@ class TokyoDriftConfigGUI(QWidget):
             # fetched dark (if any) is subtracted so the fit sees the
             # same frames the loop will.
             from fpwfsc.tokyo_drift.calibration.harness import HardwareBench
+            from fpwfsc.tokyo_drift.dm import DMSafetyBounds
             dark = getattr(self.camera, 'dark', None)
             reduce = (None if dark is None
                       else (lambda f, d=np.asarray(dark, dtype=float): f - d))
-            bench = HardwareBench(self.camera, self.aosystem, reduce=reduce)
+            safety = DMSafetyBounds(
+                max_ptv_um=float(self.config['DM']['max peak to valley (um)']),
+                max_stroke_um=float(self.config['DM']['max actuator stroke (um)']))
+            bench = HardwareBench(self.camera, self.aosystem,
+                                  reduce=reduce, safety=safety)
             print(f"Calibrating against {hardware_name} (probe pokes WILL "
-                  f"be sent to the DM channel)")
+                  f"be sent to the DM channel, bounded by the [DM] limits)")
 
         self.calibration_thread = CalibrationThread(
             mode, preset, seed, task=task, around=around,
