@@ -19,6 +19,10 @@
     dm channel               = string(default='dm00disp04')
     max peak to valley (um)  = float(min=0)
     max actuator stroke (um) = float(min=0)
+    # Crop commands to a square aperture of N actuators about the pupil
+    # (44 = the deployed fnf make_dm_command footprint at SCExAO; keeps
+    # edge actuators outside the illuminated pupil at rest). 0 disables.
+    command aperture actuators = integer(min=0, default=44)
 
 # Model<->instrument alignment (GUI display name). 'bench sim preset' is
 # a sim-only control (hidden on real hardware); 'probe amplitude' drives

@@ -35,9 +35,50 @@ def test_port_matches_bench_verbatim_construction():
     acts[3] = 1.0
     acts[7] = -0.4
     golden = _bench_verbatim_surface(acts)
+    # The bench notebooks had no command-aperture crop; disable the
+    # (default-on) taper to compare against the verbatim construction.
     ported = TranslationDM(n_modes=10, dm_actuate_scale=1.3e-06,
-                           dm_rot_deg=-6.5, shift_x=1, shift_y=2)
+                           dm_rot_deg=-6.5, shift_x=1, shift_y=2,
+                           command_aperture_act=None)
     np.testing.assert_array_equal(ported.act_and_get_surf(acts), golden)
+
+
+# --- Command-aperture taper --------------------------------------------
+
+def test_default_taper_footprint_matches_deployed_fnf_paste_box():
+    """The default 44-actuator crop, shifted by the bench (1, 2), must
+    land exactly on the deployed fnf ``make_dm_command`` paste region:
+    a 44x44 box centered at actuator (24, 23) on the 50x50 grid."""
+    diameter, center = 44, [24, 23]
+    x_start = int(center[0] - diameter / 2)
+    y_start = int(center[1] - diameter / 2)
+    fnf_box = np.zeros((50, 50), dtype=bool)
+    fnf_box[y_start:y_start + diameter, x_start:x_start + diameter] = True
+
+    acts = np.zeros(10)
+    acts[2] = 1.0  # defocus: nonzero over the whole pupil disk
+    dm = TranslationDM(n_modes=10, shift_x=1, shift_y=2)
+    surf = dm.act_and_get_surf(acts)
+    assert not np.any(surf[~fnf_box])
+    assert np.any(surf[fnf_box])
+
+
+def test_taper_only_trims_outside_the_box():
+    """Inside the aperture box the command is untouched."""
+    acts = np.random.default_rng(1).normal(size=10)
+    tapered = TranslationDM(n_modes=10).act_and_get_surf(acts)
+    full = TranslationDM(n_modes=10,
+                         command_aperture_act=None).act_and_get_surf(acts)
+    lo, hi = (50 - 44) // 2, (50 - 44) // 2 + 44
+    np.testing.assert_array_equal(tapered[lo:hi, lo:hi], full[lo:hi, lo:hi])
+    outside = np.ones((50, 50), dtype=bool)
+    outside[lo:hi, lo:hi] = False
+    assert not np.any(tapered[outside])
+
+
+def test_taper_wider_than_grid_raises():
+    with pytest.raises(ValueError):
+        TranslationDM(n_modes=10, command_aperture_act=51)
 
 
 def test_zero_actuation_gives_flat_surface():

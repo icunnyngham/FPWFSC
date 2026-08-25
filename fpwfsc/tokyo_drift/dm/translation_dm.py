@@ -43,6 +43,14 @@ class TranslationDM:
         Mirror the output surface (``flipud`` / ``fliplr``).
     shift_x, shift_y
         Integer-pixel command shifts (see module docstring). Default 0.
+    command_aperture_act
+        Crop the command to a square aperture of this many actuators,
+        applied about the grid center *before* the shifts (so the
+        footprint travels with the pupil). The default 44 reproduces
+        the deployed fnf ``make_dm_command`` footprint at SCExAO — the
+        44-actuator paste box — so edge actuators outside the
+        illuminated pupil are never commanded. ``None``/0 disables
+        (the 2024 bench notebooks' verbatim behavior).
     zernike_diameter, dm_spacing_cm, dm_res, starting_mode
         Geometry constants; defaults are the SCExAO/VAMPIRES values the
         bench sessions used (7.79 m basis on a 50x50 grid at 17 cm
@@ -58,6 +66,7 @@ class TranslationDM:
         flip_horizontal=False,
         shift_x=0,
         shift_y=0,
+        command_aperture_act=44,
         zernike_diameter=7.79,
         dm_spacing_cm=17,
         dm_res=50,
@@ -72,7 +81,14 @@ class TranslationDM:
         self.flip_h = bool(flip_horizontal)
         self.shift_x = int(shift_x)
         self.shift_y = int(shift_y)
+        self.command_aperture_act = (int(command_aperture_act)
+                                     if command_aperture_act else None)
         self.dm_shape = (int(dm_res), int(dm_res))
+        if (self.command_aperture_act is not None
+                and self.command_aperture_act > int(dm_res)):
+            raise ValueError(
+                f"command_aperture_act={self.command_aperture_act} exceeds "
+                f"the {dm_res}-actuator grid")
 
         dm_pupil_extent = dm_res * 0.01 * dm_spacing_cm
         pupil_grid = hcipy.make_pupil_grid(dm_res, dm_pupil_extent)
@@ -101,6 +117,18 @@ class TranslationDM:
             surf = np.flipud(surf)
         if self.flip_h:
             surf = np.fliplr(surf)
+
+        # Command-aperture crop (before the shifts, so the footprint
+        # travels with the pupil; a centered box is flip-invariant).
+        # With the SCExAO profile shifts (1, 2) the default 44 box lands
+        # exactly on the deployed fnf paste region centered at (24, 23).
+        if self.command_aperture_act is not None:
+            lo = (surf.shape[0] - self.command_aperture_act) // 2
+            hi = lo + self.command_aperture_act
+            surf[:lo, :] = 0.0
+            surf[hi:, :] = 0.0
+            surf[:, :lo] = 0.0
+            surf[:, hi:] = 0.0
 
         # Bench-verbatim integer shifts (guarded so 0 means "off";
         # the bench code hardcoded 1 and 2 and used `is not None`).

@@ -96,9 +96,14 @@ def fitted_profile(tmp_path_factory):
 def oracle_result(fitted_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
+    # Early-stop threshold sits just under the converged ceiling, which
+    # dropped ~0.95 -> ~0.94 when the default 44-actuator command
+    # aperture landed (2026-08): the injected error's edge content in
+    # the 44-to-45.8-actuator annulus of the 7.79 m basis is now
+    # deliberately left uncommanded ("don't overwork the edges").
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 15,
                          "LOOP_SETTINGS.predictor": "oracle",
-                         "LOOP_SETTINGS.strehl early stop": 0.95,
+                         "LOOP_SETTINGS.strehl early stop": 0.92,
                          "MODE.calibration profile": fitted_profile})
     return run("Sim", "Sim", config=cfg, configspec=SPEC)
 
@@ -109,7 +114,9 @@ def test_oracle_loop_converges(oracle_result):
     strehls = loop["strehls"]
     valid = strehls[np.isfinite(strehls)]
     assert valid[0] < 0.3          # starts aberrated
-    assert valid[-1] >= 0.95       # converges (proxy ~1 at reference)
+    # Converged ceiling ~0.94 with the default 44-act command aperture
+    # (see the oracle_result fixture comment); was >= 0.95 untapered.
+    assert valid[-1] >= 0.92       # converges (proxy ~1 at reference)
 
     # The converged state cancels the injected error
     error = oracle_result["injected_error_coeffs"]
