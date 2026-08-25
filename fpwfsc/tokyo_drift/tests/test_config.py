@@ -101,9 +101,16 @@ def test_run_sim_returns_validated_settings():
     assert result["loop"] is None
 
 
-def test_run_real_hardware_not_implemented():
-    with pytest.raises(NotImplementedError):
-        run(object(), object(), config=SIM_INI, configspec=SPEC)
+def test_run_real_hardware_path_reaches_profile_gate():
+    """The hardware branch is implemented (2026-08): arbitrary wrapper
+    objects proceed past instantiation — warning that the camera has no
+    filter_name — and stop at the explicit no-calibration-profile gate
+    (SIM_INI ships with profile None). Full hardware-path coverage
+    lives in test_hardware_branch.py."""
+    pytest.importorskip("telescope_sim")
+    with pytest.warns(UserWarning, match="no filter_name"):
+        with pytest.raises(ValueError, match="calibration profile"):
+            run(object(), object(), config=SIM_INI, configspec=SPEC)
 
 
 def test_run_respects_stop_event():

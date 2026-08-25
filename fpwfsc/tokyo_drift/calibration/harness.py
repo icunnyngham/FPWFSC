@@ -36,6 +36,29 @@ def _angle_error_deg(fitted, expected):
 DEFAULT_PROBE_AMPLITUDE = 0.3
 
 
+class HardwareBench:
+    """Duck-typed 'bench' backing the calibration harness with real
+    hardware: raw 50x50 micron commands to the AO system, (optionally
+    reduced) frames from the camera — the same two calls the loop
+    makes. Deliberately has NO ``truth`` attribute: the harness then
+    returns the fitted profile without a sim recovery report.
+
+    NOTE: unlike preflight, calibration DOES send DM commands (the
+    probe pokes); use it only when you have the bench.
+    """
+
+    def __init__(self, camera, aosystem, reduce=None):
+        self.camera = camera
+        self.aosystem = aosystem
+        self._reduce = reduce if reduce is not None else (lambda f: f)
+
+    def set_dm_data(self, command):
+        return self.aosystem.set_dm_data(command)
+
+    def take_image(self, average=1):
+        return self._reduce(self.camera.take_image(average=average))
+
+
 def acquire_probe(mode_name, *, preset="easy", seed=None, bench=None,
                   ideal=None, average=8,
                   probe_amplitude=DEFAULT_PROBE_AMPLITUDE):
@@ -241,28 +264,7 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
         "shift_y": 0,
     }
 
-    # --- recovery report (the ONLY place truth is read) ---------------
-    # NOTE on dm_scale: the fit measures the EFFECTIVE command->
-    # wavefront gain — the nominal influence-function overshoot
-    # (``nominal_dm_gain``, ~1.6) times the injected truth scale. That
-    # is the quantity the loop needs — the same physics the real bench
-    # absorbed into dm_actuate_scale (1.4e-6 against a 1e-6 nominal).
-    # ``dm_scale_over_truth`` should therefore recover ~nominal_dm_gain;
-    # the meaningful regression gate is loop convergence with the
-    # fitted profile.
-    truth = bench.truth
-    expected_rot = (-truth["image_rot_deg"]) % 360.0
     report = {
-        "truth": dict(truth),
-        "image_rot_error_deg": _angle_error_deg(profile["image_rot_deg"],
-                                                expected_rot),
-        "dm_scale_over_truth": profile["dm_scale"] / truth["dm_scale"],
-        "dm_scale_error_frac": (profile["dm_scale"] - truth["dm_scale"])
-                               / truth["dm_scale"],
-        # The bench sim never flips the *image* (DM-side flips are a
-        # separate axis, v1-unfitted), so fitted image flips should be
-        # False whenever the injected DM flips are too.
-        "flips_expected_false": not (profile["flip_x"] or profile["flip_y"]),
         "rotation_curve": (rotation["angles"], rotation["scores"]),
         "scale_curve": (scale["scales"], scale["scores"]),
         "stage_previews": {
@@ -277,4 +279,32 @@ def calibrate_bench_sim(mode_name, preset="easy", seed=None, *,
         "nominal_dm_gain": ctx["nominal_gain"],
         "corrector": corrector,
     }
+
+    # --- recovery report (the ONLY place truth is read; sim only) -----
+    # A real-hardware bench (HardwareBench) has no .truth — the profile
+    # is the deliverable and there is nothing to score against.
+    # NOTE on dm_scale: the fit measures the EFFECTIVE command->
+    # wavefront gain — the nominal influence-function overshoot
+    # (``nominal_dm_gain``, ~1.6) times the injected truth scale. That
+    # is the quantity the loop needs — the same physics the real bench
+    # absorbed into dm_actuate_scale (1.4e-6 against a 1e-6 nominal).
+    # ``dm_scale_over_truth`` should therefore recover ~nominal_dm_gain;
+    # the meaningful regression gate is loop convergence with the
+    # fitted profile.
+    truth = getattr(bench, "truth", None)
+    if truth is not None:
+        expected_rot = (-truth["image_rot_deg"]) % 360.0
+        report.update({
+            "truth": dict(truth),
+            "image_rot_error_deg": _angle_error_deg(
+                profile["image_rot_deg"], expected_rot),
+            "dm_scale_over_truth": profile["dm_scale"] / truth["dm_scale"],
+            "dm_scale_error_frac": (profile["dm_scale"] - truth["dm_scale"])
+                                   / truth["dm_scale"],
+            # The bench sim never flips the *image* (DM-side flips are a
+            # separate axis, v1-unfitted), so fitted image flips should
+            # be False whenever the injected DM flips are too.
+            "flips_expected_false": not (profile["flip_x"]
+                                         or profile["flip_y"]),
+        })
     return profile, report

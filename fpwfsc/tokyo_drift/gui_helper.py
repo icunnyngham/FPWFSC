@@ -181,10 +181,10 @@ config_info = {
                     "draws N noise realizations of one rendered frame "
                     "(cheap). Default 8: enough for the coronagraph loop "
                     "at the training-era flux; calibration quality is "
-                    "insensitive from ~4 up. CAUTION on VAMPIRES "
-                    "hardware: the current upstream class treats any "
-                    "value != 1 as a hardcoded 50-frame mean (see "
-                    "PENDING_VAMPIRES_INTEGRATION_NOTES).",
+                    "insensitive from ~4 up. On VAMPIRES hardware this "
+                    "waits for N successive fresh camera frames "
+                    "(pyMilk multi_recv_data), so latency scales with "
+                    "N / frame rate.",
             "expert": False
         }
     },

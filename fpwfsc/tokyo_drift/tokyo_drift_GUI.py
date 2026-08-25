@@ -272,6 +272,28 @@ class TokyoDriftConfigGUI(QWidget):
 
         main_layout.addLayout(selector_layout)
 
+        # --- Camera dark status (real hardware only) --------------------
+        # The bench procedure is: write a dark to the camera's dark shm
+        # stream before the run; the GUI fetches it on hardware connect
+        # and this row shows what (if anything) it got. Refetch after
+        # retaking darks mid-session. Hidden in Sim mode.
+        self.dark_row = QWidget()
+        dark_layout = QHBoxLayout(self.dark_row)
+        dark_layout.setContentsMargins(0, 0, 0, 0)
+        self.dark_status_label = QLabel("dark: n/a")
+        self.dark_status_label.setToolTip(
+            "Dark frame retrieved from the camera's shm dark stream. "
+            "It feeds the frame reducer unless a background file is "
+            "configured. Amber means no dark was found - frames run "
+            "without background subtraction.")
+        self.refetch_dark_button = QPushButton("Refetch dark")
+        self.refetch_dark_button.setFixedHeight(20)
+        self.refetch_dark_button.clicked.connect(self.on_refetch_dark)
+        dark_layout.addWidget(self.dark_status_label, stretch=1)
+        dark_layout.addWidget(self.refetch_dark_button)
+        self.dark_row.setVisible(False)
+        main_layout.addWidget(self.dark_row)
+
         # --- Model<->instrument alignment section ----------------------
         # Groups the sim-only bench preset, the calibration probe
         # amplitude, and the fitted-parameter panel together (top to
@@ -615,11 +637,25 @@ class TokyoDriftConfigGUI(QWidget):
         frames_to_average = int(self.config['SNR']['frames to average'])
 
         # Reuse the built sims only while mode/preset/seed/flux are unchanged
-        context_key = (mode, preset, seed, int_phot_flux)
+        hardware_name = self.hardware_select.currentText()
+        context_key = (mode, preset, seed, int_phot_flux, hardware_name)
         bench = ideal = None
         if context_key == getattr(self, '_calib_context_key', None):
             bench, ideal = self.calib_bench, self.calib_ideal
         self._calib_context_key = context_key
+
+        if hardware_name != 'Sim' and bench is None:
+            # Calibrate against the REAL instrument: probe pokes go out
+            # the DM channel and frames come back from the camera. The
+            # fetched dark (if any) is subtracted so the fit sees the
+            # same frames the loop will.
+            from fpwfsc.tokyo_drift.calibration.harness import HardwareBench
+            dark = getattr(self.camera, 'dark', None)
+            reduce = (None if dark is None
+                      else (lambda f, d=np.asarray(dark, dtype=float): f - d))
+            bench = HardwareBench(self.camera, self.aosystem, reduce=reduce)
+            print(f"Calibrating against {hardware_name} (probe pokes WILL "
+                  f"be sent to the DM channel)")
 
         self.calibration_thread = CalibrationThread(
             mode, preset, seed, task=task, around=around,
@@ -702,12 +738,17 @@ class TokyoDriftConfigGUI(QWidget):
         self.calib_corrector = report["corrector"]
         self._last_scale_render = None
         self._set_calibration_fields(profile)
-        print("Calibration complete. Sim-only recovery report: "
-              f"rotation error {report['image_rot_error_deg']:.3f} deg, "
-              f"fitted/injected scale {report['dm_scale_over_truth']:.3f} "
-              "(sits above 1 by the DM influence-function gain - that IS "
-              "the effective gain the loop needs), "
-              f"flips-as-expected {report['flips_expected_false']}.")
+        if "image_rot_error_deg" in report:
+            print("Calibration complete. Sim-only recovery report: "
+                  f"rotation error {report['image_rot_error_deg']:.3f} deg, "
+                  f"fitted/injected scale {report['dm_scale_over_truth']:.3f} "
+                  "(sits above 1 by the DM influence-function gain - that IS "
+                  "the effective gain the loop needs), "
+                  f"flips-as-expected {report['flips_expected_false']}.")
+        else:
+            print("Calibration complete (real hardware - no injected truth "
+                  "to score against). Check the stage previews / RMS "
+                  "progress, then judge by loop convergence.")
         print("Review/edit the parameters, then 'Save calibration'.")
 
     def on_calibration_failed(self, message):
@@ -814,8 +855,11 @@ class TokyoDriftConfigGUI(QWidget):
     def on_hardware_changed(self, selected_hardware):
         try:
             print(f"Loading {selected_hardware}...")
+            aoargs = {}
+            if selected_hardware != 'Sim':
+                aoargs['dm_channel'] = self.config['DM']['dm channel']
             self.camera, self.aosystem = helper.load_instruments(
-                selected_hardware, camargs={}, aoargs={})
+                selected_hardware, camargs={}, aoargs=aoargs)
             print(f"{selected_hardware} loaded successfully")
         except Exception as e:
             print(f"Error loading {selected_hardware}: {str(e)}")
@@ -827,12 +871,41 @@ class TokyoDriftConfigGUI(QWidget):
                 self.hardware_select.blockSignals(False)
                 self.camera, self.aosystem = 'Sim', 'Sim'
         self._apply_sim_only_visibility()
+        self._update_dark_status()
+
+    def on_refetch_dark(self):
+        """Re-read the camera's dark shm stream (after retaking darks
+        mid-session)."""
+        if not hasattr(self.camera, 'fetch_dark'):
+            print("Selected camera has no dark stream support")
+            return
+        try:
+            self.camera.fetch_dark()
+            print(f"Dark refetched: {self.camera.dark_info}")
+        except Exception as e:
+            print(f"Dark refetch failed: {e}")
+        self._update_dark_status()
+
+    def _update_dark_status(self):
+        if self.camera == 'Sim':
+            return
+        dark = getattr(self.camera, 'dark', None)
+        if dark is not None:
+            info = getattr(self.camera, 'dark_info', 'fetched')
+            self.dark_status_label.setText(f"dark: {info}")
+            self.dark_status_label.setStyleSheet("color: green;")
+        else:
+            self.dark_status_label.setText(
+                "dark: NONE - no background subtraction")
+            self.dark_status_label.setStyleSheet("color: darkorange;")
 
     def _apply_sim_only_visibility(self):
         """Show sim-only controls (the bench-sim preset) only in Sim mode;
-        they inject fake hardware and have no meaning on a real instrument."""
+        they inject fake hardware and have no meaning on a real
+        instrument. The dark-status row is the inverse: hardware only."""
         is_sim = self.hardware_select.currentText() == 'Sim'
         self.preset_row.setVisible(is_sim)
+        self.dark_row.setVisible(not is_sim)
 
     # --- Run / stop -------------------------------------------------------
 

@@ -10,6 +10,7 @@ the other FPWFSC pipelines: ``run()`` reads a validated .ini config and
 executes the control loop; the GUI, the command line, and notebooks all
 call this same function.
 """
+import re
 import sys
 import threading
 from pathlib import Path
@@ -17,6 +18,44 @@ from pathlib import Path
 import numpy as np
 
 from ..common import support_functions as sf
+
+
+def _filter_number(name):
+    """Leading number in a filter name, as a string (None if none).
+
+    Tolerant of naming-convention differences between the mode manifest
+    ('F750') and the camera keyword ('750-50'): both reduce to '750'.
+    """
+    match = re.search(r'(\d+)', str(name))
+    return match.group(1) if match else None
+
+
+def assert_camera_matches_mode(camera_obj, mode_name):
+    """Refuse to run a filter-specific NN against the wrong filter.
+
+    tokyo_drift locks wavelength / pixel scale to the trained mode
+    rather than reading camera keywords, so the one thing that MUST be
+    checked at connect time is that the camera's current filter is the
+    one the checkpoint was trained on.
+    """
+    from .mode_registry import load_manifest
+    want = load_manifest(mode_name).get('filter')
+    have = getattr(camera_obj, 'filter_name', None)
+    if not want:
+        return
+    if have is None:
+        import warnings
+        warnings.warn(
+            f"camera exposes no filter_name; cannot verify it matches "
+            f"mode {mode_name!r} (trained on {want!r})")
+        return
+    if _filter_number(want) != _filter_number(have):
+        raise ValueError(
+            f"camera filter {have!r} does not match mode {mode_name!r} "
+            f"(trained on {want!r}); change the filter or pick the "
+            f"matching mode")
+    print(f"tokyo_drift: camera filter {have!r} matches mode filter "
+          f"{want!r}")
 
 
 def make_frame_reducer(bgds, estimate_background_from_border):
@@ -115,23 +154,20 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     print(f"tokyo_drift: config OK - mode '{mode_name}', "
           f"{n_iter} iterations requested.")
 
-    if not (camera == 'Sim' and aosystem == 'Sim'):
-        raise NotImplementedError(
-            "tokyo_drift real-hardware backends are not implemented yet; "
-            "run with camera='Sim', aosystem='Sim'")
+    sim_mode = (camera == 'Sim' and aosystem == 'Sim')
 
     if my_event.is_set():
         return {"settings": settings, "loop": None}
 
     # ------------------------------------------------------------------
-    # Simulation-mode backends
+    # Backends (simulated bench, or real-hardware wrapper instances)
     # ------------------------------------------------------------------
     from .dm import DMSafetyBounds, TranslationDM
     from .loop import LeakyIntegrator, peak_flux_ratio, run_closed_loop
     from .mode_registry import mode_n_modes, mode_zernike_diameter
     from .predictors import CheatingOracle, RandomWalkPredictor
     from .preprocess import PreprocessImage
-    from .sim import BenchSim, BenchSimAO, BenchSimCamera, IdealSim
+    from .sim import IdealSim
     from .sim.bench_sim import DM_NOMINAL_SCALE
 
     # Two seeds, two owners: `seed` pins the BENCH (misalignment truth +
@@ -143,12 +179,34 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     n_modes = mode_n_modes(mode_name)
 
     ideal = IdealSim.from_mode(mode_name)
-    bench = BenchSim.from_mode(mode_name, preset=preset_name, seed=seed,
-                               int_phot_flux=10.0 ** flux_exponent)
-    Camera = BenchSimCamera(bench)
-    AOsystem = BenchSimAO(bench)
-    truth = bench.truth
-    print(f"tokyo_drift: bench-sim injected truth (sim-only): {truth}")
+    if sim_mode:
+        from .sim import BenchSim, BenchSimAO, BenchSimCamera
+        bench = BenchSim.from_mode(mode_name, preset=preset_name, seed=seed,
+                                   int_phot_flux=10.0 ** flux_exponent)
+        Camera = BenchSimCamera(bench)
+        AOsystem = BenchSimAO(bench)
+        truth = bench.truth
+        print(f"tokyo_drift: bench-sim injected truth (sim-only): {truth}")
+    else:
+        # Real hardware: wrapper instances built by the caller (see
+        # gui_helper.load_instruments). The camera must match the mode
+        # the NN was trained for — the model is filter-specific.
+        Camera = camera
+        AOsystem = aosystem
+        truth = None
+        assert_camera_matches_mode(Camera, mode_name)
+        # A dark fetched from the camera's shm stream stands in for a
+        # background file, unless one was configured explicitly. The
+        # reducer stays the single place backgrounds get subtracted.
+        camera_dark = getattr(Camera, 'dark', None)
+        if camera_dark is not None and bgds['bkgd'] is None:
+            bgds['bkgd'] = np.asarray(camera_dark, dtype=float)
+            print(f"tokyo_drift: using camera dark "
+                  f"({getattr(Camera, 'dark_info', 'no info')})")
+        elif camera_dark is None and bgds['bkgd'] is None:
+            print("tokyo_drift: WARNING - no camera dark and no "
+                  "background file; frames will be reduced without "
+                  "background subtraction")
 
     # Calibration is a separate, explicit step: the loop only ever
     # consumes a saved profile (fit one with the calibration harness /
@@ -165,7 +223,8 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         raise ValueError(
             f"calibration profile is for mode {profile_mode!r}, "
             f"not {mode_name!r}")
-    assert_sim_safe(profile)  # shifts are bench-only; refuse in sim
+    if sim_mode:
+        assert_sim_safe(profile)  # shifts are bench-only; refuse in sim
 
     translator = TranslationDM(
         n_modes=n_modes,
@@ -173,6 +232,9 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         dm_rot_deg=profile["dm_rot_deg"] or None,
         flip_horizontal=profile["dm_flip_x"],
         flip_vertical=profile["dm_flip_y"],
+        shift_x=profile.get("shift_x", 0) or 0,
+        shift_y=profile.get("shift_y", 0) or 0,
+        command_aperture_act=settings['DM']['command aperture actuators'],
         zernike_diameter=mode_zernike_diameter(mode_name),
     )
     preprocess = PreprocessImage(
@@ -201,11 +263,16 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         def take_image(average=1):
             return reduce(Camera.take_image(average=average))
 
-    # Reference frame from the pristine bench (before the hidden error
-    # is injected): the diffraction-limited PSF of THIS optical system,
-    # the denominator of both Strehl estimates.
-    reference_frame = preprocess.process(reduce(bench.take_image_noiseless()),
-                                         normalize=False)
+    # Reference frame: the diffraction-limited PSF, the denominator of
+    # both Strehl estimates. In sim it comes from the pristine bench
+    # (before the hidden error is injected); on hardware there is no
+    # noiseless bench, so the mode's ideal-model PSF stands in — the
+    # same reference the NN was trained against.
+    if sim_mode:
+        reference_frame = preprocess.process(
+            reduce(bench.take_image_noiseless()), normalize=False)
+    else:
+        reference_frame = np.asarray(ideal.reference_psf, dtype=float)
     if strehl_method == 'vandam':
         from ..common import vandamstrehl as vd
 
@@ -217,14 +284,18 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         def strehl_fn(frame):
             return peak_flux_ratio(frame) / reference_ratio
 
-    # Inject the hidden wavefront error the loop must correct — an
-    # EXTERNAL (NCPA-like) aberration in the training modal basis, NOT
-    # routed through the DM: cancelling it requires the DM's effective
-    # command-to-wavefront gain, which is what the calibrated dm_scale
-    # measures (the same physics the real bench absorbed into
-    # dm_actuate_scale ~1.4e-6 against a 1e-6 nominal).
-    error_coeffs = rng.normal(0.0, initial_error_rms, n_modes)
-    bench.set_modal_error(error_coeffs)
+    # Inject the hidden wavefront error the loop must correct (sim
+    # only) — an EXTERNAL (NCPA-like) aberration in the training modal
+    # basis, NOT routed through the DM: cancelling it requires the DM's
+    # effective command-to-wavefront gain, which is what the calibrated
+    # dm_scale measures (the same physics the real bench absorbed into
+    # dm_actuate_scale ~1.4e-6 against a 1e-6 nominal). On hardware the
+    # real NCPA plays this role and nothing is injected.
+    if sim_mode:
+        error_coeffs = rng.normal(0.0, initial_error_rms, n_modes)
+        bench.set_modal_error(error_coeffs)
+    else:
+        error_coeffs = None
 
     integrator = LeakyIntegrator(n_modes, gain=gain, leak=leak_factor)
     # The NN needs a known diversity move before its first prediction (two
@@ -232,6 +303,10 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     # predictors ignore actuation, so they run with no initial move.
     initial_move = None
     if predictor_name == 'oracle':
+        if not sim_mode:
+            raise ValueError(
+                "the 'oracle' predictor needs the sim's injected truth; "
+                "on hardware use predictor = 'model'")
         predictor = CheatingOracle(
             residual_fn=lambda: error_coeffs + integrator.state, rng=rng)
     elif predictor_name == 'random_walk':
