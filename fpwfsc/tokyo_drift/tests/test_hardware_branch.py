@@ -209,7 +209,9 @@ def test_hardware_wfe_injection_records_and_zeros(hardware_profile,
     assert np.any(injector.commands[1] != 0)
     assert np.any(injector.commands[0] != injector.commands[1])
     np.testing.assert_array_equal(injector.commands[2], np.zeros((50, 50)))
-    # Correction channel also ends zeroed (injection-specific solution)
+    # Correction channel: injection runs zero it at episode-0 start too
+    # (provably clean channel under every frame) and again at run end.
+    np.testing.assert_array_equal(ao.commands[0], np.zeros((50, 50)))
     np.testing.assert_array_equal(ao.commands[-1], np.zeros((50, 50)))
 
     # Coefficients are recorded per episode - no longer null on hardware

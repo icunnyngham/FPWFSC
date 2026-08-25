@@ -368,10 +368,15 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
                 break
             if n_repeats > 1:
                 print(f"tokyo_drift: episode {episode + 1}/{n_repeats}")
-            if episode > 0:
+            if episode > 0 or injector is not None:
                 # The loop images before it commands and never resets the
                 # DM, so each new episode must start it from zero (through
-                # the loop's own command path).
+                # the loop's own command path). Episode 0 normally trusts
+                # the operator-zeroed channel (a deliberately pre-loaded
+                # flat must survive), but an injection run owns the
+                # correction channel outright (it zeroes it at the end
+                # anyway), so it also zeroes at the start - making every
+                # episode's frame<->command accounting provably clean.
                 AOsystem.set_dm_data(
                     translator.command_microns(np.zeros(n_modes)))
 
