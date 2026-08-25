@@ -1,5 +1,12 @@
 # Pending VAMPIRES hardware integration — audit notes
 
+> **STATUS 2026-08-11: the hardware backend is now implemented** and
+> the `common/` breakage below is fixed on this branch — see the dated
+> update section at the bottom for what changed, what was verified
+> against the Subaru sc6 reference checkout, and the bench-day risk
+> register. The audit text below is kept as written (2026-07) for the
+> record.
+
 tokyo_drift is functionally complete in sim mode; the real-hardware
 backend is the remaining work (`run()` currently raises
 `NotImplementedError` for non-Sim). Before wiring it, we audited the
@@ -99,3 +106,131 @@ thin. Beyond the `common/` fixes above:
   `hw.Vampires` does no dark handling. Covered by pointing
   `[CAMERA CALIBRATION] background file` at a FITS snapshot of that
   stream; document as the bench procedure.
+
+---
+
+# 2026-08-11 update — Subaru sc6 reference comparison + backend landed
+
+We obtained `seb_sc6_fpwfsc/` (project root, outside this repo): a
+snapshot of the FPWFSC checkout on the Subaru sc6 machine — upstream
+`mb2448/FPWFSC` main @ `aa9c5d1` (2025-05-19) plus **uncommitted**
+hand-edits that ran F&F on **Palila** at the telescope (`git diff`
+inside that clone is the flight-proven delta). Verification of the
+audit against it, and what landed on this branch:
+
+## Audit items, resolved
+
+1. **Off-instrument importability** — fixed here the same way the sc6
+   edit did: Keck imports guarded in a `try`, plus the SUBARU import
+   block (`pyMilk` shm, `sf`, `vampires_control`, `time`).
+2. **Missing Subaru imports** — same fix, confirmed against sc6.
+3. **fnf drifted Keck-ward** — *deliberately not fixed*: fnf is
+   upstream's problem; this branch only makes `common/` importable and
+   the Subaru classes constructible. `SCEXAO.__init__` now accepts
+   `(dm_channel, rotation_angle_dm, flip_x, flip_y)` and
+   `make_dm_command` honors the flips (matching sc6), but our fnf
+   `run.py` remains upstream's Keck-shaped version.
+4. **`dm00disp04` hardcoded** — fixed: `SCEXAO(dm_channel=...)`,
+   plumbed from `[DM] dm channel` (GUI passes it on hardware connect).
+   sc6 did NOT fix this; default stays `dm00disp04` = what their
+   deployment writes to.
+
+## Deliberate divergence from the sc6 reference
+
+- **`SCEXAO.set_dm_data` stays RAW** (50x50 microns-of-surface float32
+  straight to the shm channel). The sc6 uncommitted edit repurposed
+  `set_dm_data(phase)` to run `make_dm_command` internally (fnf
+  convenience). tokyo_drift's whole contract — TranslationDM, the
+  bench sim's TS2 actuator DM, the 2024 bench sessions — is built on
+  the raw write, and the truly flight-proven layer
+  (`shm.set_data(float32) + 10 ms settle`) is identical either way.
+  If anyone diffs the two trees on the mountain, this is why.
+
+## Verified against sc6 / adopted
+
+- **DM pupil geometry**: their `make_dm_command` pastes a 44-actuator
+  patch centered at (24, 23) — numerically identical footprint to the
+  bench notebooks' `shift_x=1, shift_y=2` on a centered pattern. Their
+  knowledge and Ian's manual 2024 derivation agree exactly.
+- **Command-aperture taper** (new): TranslationDM now crops commands
+  to a square `command_aperture_act` box (default 44, config
+  `[DM] command aperture actuators`, 0 disables) applied before the
+  shifts — so with profile shifts (1, 2) the footprint lands exactly on
+  their paste box. Edge actuators outside the illuminated pupil are
+  never commanded. Note the trained basis is 7.79 m (~45.8 act), so the
+  44-box trims its outer sliver: sim oracle ceiling drops ~0.95→~0.94
+  (tests updated); NN loop unaffected in practice.
+- **pyMilk API (RESOLVED, was a "risk")**: modern pyMilk (HEAD
+  2026-03) changed `get_data` to `(check, timeout, copy, ...)` —
+  `reform`/`sleepT` are gone, so the old xaosim-style
+  `get_data(True, True, timeout=1.)` **raises TypeError**. This is why
+  the sc6 Palila edits use bare `get_data()`. Our `Vampires.take_image`
+  now uses `get_data(check=True, timeout=1.)` per frame and
+  `multi_recv_data(N, output_as_cube=True)` for averaging (honoring the
+  requested N — the 50-frame hardcode is gone; note sc6's Palila still
+  hardcodes 150).
+- **Dark handling**: `Vampires.fetch_dark()` reads a `vcam1_dark` shm
+  frame (sc6's Palila pattern, minus the silent-zeros fallback);
+  `take_image` stays RAW and the dark feeds the pipeline's frame
+  reducer (single subtraction point). GUI: auto-fetch on hardware
+  connect, status row (green/amber), Refetch button.
+- **Filter assertion**: `run.assert_camera_matches_mode` compares the
+  camera `FILTER01` keyword against the mode manifest's `filter:` by
+  leading number ('F750' ~ '750-50'); hard-fails on mismatch, warns if
+  the camera exposes no filter name.
+- **Calibration on hardware**: the GUI's View / Auto-calibrate / Fine
+  tune now work against the real instrument via
+  `calibration.harness.HardwareBench` (raw commands out, dark-subtracted
+  frames back — the same two calls the loop makes). No `.truth` on
+  hardware, so the harness returns the profile without the sim recovery
+  report; judge by the stage previews and then loop convergence.
+  NOTE: unlike preflight, calibration sends real DM probe pokes.
+
+## Bench-day interface risk register (VAMPIRES unverified since 2024)
+
+The sc6 reference ran **Palila**, so no VAMPIRES-specific code has been
+exercised on the instrument since Ian's May 2024 sessions. Check on
+arrival (most are covered by `python -m fpwfsc.tokyo_drift.preflight`,
+which is strictly read-only):
+
+- [ ] `vcam1` stream exists and is being written (preflight reads it)
+- [ ] `vcam1_dark` naming still right (bench procedure: write a dark
+      there before the run; preflight warns if absent)
+- [ ] pyMilk `get_data(check=, timeout=)` signature + `multi_recv_data`
+      present (preflight inspects the signature)
+- [ ] `vampires_control.filters.get_filter_info_dict` importable and
+      its dict still has `WAVEAVE` (loop works without it; wavelength
+      display only)
+- [ ] `FILTER01` keyword format vs mode manifest (preflight compares)
+- [ ] Pixel scale: class says 5.9 mas/pix "need to confirm", modes
+      trained at 6.0. **The SCExAO wiki warns VAMPIRES is
+      non-telecentric — plate scale changes with focus/beamsplitter
+      config** — so treat it as per-configuration; a ~1.7% sampling
+      mismatch is NOT absorbed by the calibration axes.
+- [ ] Frame geometry: class hardcodes 536x536; wiki-era crops were
+      128/256/512 windows and the new cameras have MBI crop modes.
+      The pipeline doesn't use xsize/ysize, but crop_cx/cy in the
+      calibration profile must be re-fit for the actual frame.
+- [ ] DM channel: default `dm00disp04` (current FnF deployment); May
+      2024 sessions used `dm00disp02`. Confirm with the SCExAO crew
+      which channel is allocated to us; it's `[DM] dm channel`.
+- [ ] Detector: VAMPIRES is the visible arm — CMOS (wiki specs 0.45 /
+      0.25 e- read noise fast/slow, 0.1 e-/ADU), NOT a CRED2 (that's
+      Palila). If frames show row/column striping, sc6's
+      `support_functions.py` edit has a row+col-median background
+      estimator worth porting as a reducer *option* (do not change the
+      shared `equalize_image` default — it would alter every pipeline
+      including Keck).
+- [ ] DM basis diameter: their fnf resamples to 44 actuators (7.48 m);
+      our trained basis is 7.79 m (~45.8 act). Centers agree exactly
+      (see above); the ~2-actuator edge-taper difference is a modeling
+      choice pinned by the NN training, not an error.
+
+## Keck / other-config impact
+
+- `common/bench_hardware.py`: import guards preserve on-Keck behavior
+  (imports still succeed there); all class changes are Subaru-only
+  classes. Keck aliases untouched.
+- fnf untouched (still Keck-shaped; would need a per-instrument branch
+  to run at Subaru — upstream's call).
+- No changes to qacits / san / satellite.

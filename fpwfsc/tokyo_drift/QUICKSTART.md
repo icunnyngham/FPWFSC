@@ -65,6 +65,86 @@ python -c "from fpwfsc.tokyo_drift.mode_registry import list_modes, checkpoint_p
 unavailable and the debug predictors still work — but the interesting
 predictor is obviously the model.)
 
+## 3a. Deploying to an instrument machine (rsync + conda)
+
+Tested recipe for standing this up on a bench computer that has conda:
+
+```bash
+# 1. Copy the repo, dereferencing symlinks (-L): the checkpoint .pt
+#    files are symlinks pointing OUTSIDE the repo and must travel as
+#    real files (a plain -a copies broken links). The three checkpoint
+#    links are the ONLY symlinks under FPWFSC/, so -L is safe here —
+#    but rsync FPWFSC/ itself, not the parent project directory, or -L
+#    will also chase the project-root tokyo_drift_training symlink.
+#    Alternatively skip -L and untar the checkpoint tar on the far
+#    side (section 3).
+rsync -avL FPWFSC/ scexao@<machine>:<dest>/FPWFSC/
+
+# 2. Fresh env: conda supplies only python + pip; everything else
+#    comes from pip via the package's own dependency list, so there is
+#    exactly one resolver in play. Python 3.11 = what development runs.
+conda create -n tokyo-drift python=3.11 pip
+conda activate tokyo-drift
+
+# 3. Install FPWFSC + the tokyo-drift extra (torch, telescope-sim,
+#    pyyaml + the base deps). For a CPU-only box, install the CPU torch
+#    wheel FIRST to avoid the multi-GB CUDA download:
+#      pip install torch --index-url https://download.pytorch.org/whl/cpu
+cd <dest>/FPWFSC
+pip install -e ".[tokyo-drift]"
+
+# 4. pyMilk (shared-memory interface; NOT on PyPI). Its pip build
+#    compiles the ImageStreamIO pybind bindings into THIS env (needs a
+#    C compiler; cmake/pybind11 are fetched automatically). Two traps:
+#    - ImageStreamIO is a git SUBMODULE: --recursive is required, or
+#      CMake fails with "does not appear to contain CMakeLists.txt"
+#      (in an existing clone: `git submodule update --init`).
+#    - Must be -e: the project's CMake misbehaves under plain
+#      `pip install .`.
+git clone --recursive https://github.com/milk-org/pyMilk
+pip install -e ./pyMilk
+#    If CUDA_ROOT is set in the machine environment, setup.py builds
+#    with -DUSE_CUDA=ON; on CUDA compile errors, force it off (we only
+#    use SHM, no CUDA needed):  env -u CUDA_ROOT pip install -e ./pyMilk
+
+# 5. (Optional) vampires_control — Subaru-only filter lookup; the loop
+#    runs without it (wavelength display warns). If wanted, pip install
+#    -e the machine's existing checkout into this env.
+
+# 6. Verify everything without touching hardware state:
+python -m fpwfsc.tokyo_drift.preflight
+```
+
+Preflight is the acceptance test for the install: environment, config,
+checkpoints loading on CPU, the pyMilk API, and (on the instrument
+network) read-only attachment to the camera / dark / DM streams. Notes:
+
+- `KMP_DUPLICATE_LIB_OK` is a macOS-specific workaround; the code sets
+  it defensively everywhere, nothing to do on Linux.
+- The GUI needs a display — run it inside the machine's VNC desktop or
+  with X forwarding.
+- Do NOT reuse the machine's system python or an existing MILK-coupled
+  env: pyMilk's compiled bindings are per-python-version, which is why
+  step 4 builds them into this env rather than borrowing them.
+
+## 3b. Preflight (do this on an instrument machine)
+
+Before touching any hardware — and as a general install check — run the
+read-only preflight:
+
+```bash
+python -m fpwfsc.tokyo_drift.preflight
+```
+
+It verifies the environment (torch/hcipy/telescope-sim), validates the
+config, loads every mode's checkpoint on CPU, checks the pyMilk API
+matches what the hardware classes call, and — on an instrument machine —
+attaches to the camera / dark / DM shared-memory streams **read-only**
+(it never sends a command) and compares the camera's filter keyword
+against each mode. Off-instrument the hardware checks SKIP. Exit code is
+nonzero iff something FAILs. See `--help` for `--mode`, `--config`,
+`--camera-stream`, `--dark-stream`, `--skip-hardware`.
+
 ## 4. Run the GUI
 
 ```bash
