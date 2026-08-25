@@ -284,3 +284,24 @@ per episode on the live bench would contaminate the denominator.
 Session logs also now carry `episode.json` (episode index, injected
 error coefficients, initial diversity move) so `state[0]` is
 decomposable offline.
+
+## DM safety trips are now structured episode aborts (not crashes)
+
+Previously a `DMSafetyError` propagated unhandled: the tripping
+iteration was never logged (the callback runs after send), no
+summary.json was written, remaining repeats died, the GUI thread ended
+with only a terminal traceback, and the DM kept the last (near-limit)
+sent command. Now the loop catches the refusal: the violating command
+is still never sent, but the episode ends with `aborted: "dm_safety"`
+in its result/summary, the full forensics are logged (the refused
+command as `dm_command_refused.fits` — deliberately NOT
+`dm_command.fits`, so offline tools never mistake it for an applied
+command — plus `command_sent: false` and the refusal message in that
+iteration's metadata), the DM is zeroed, and later episodes continue.
+If the first 3 episodes all abort, the run stops (systematic gain /
+calibration problem, not unlucky draws). The GUI now surfaces any
+loop-thread exception as a dialog. Behavior change for scripts:
+`run()` no longer raises `DMSafetyError` — check
+`result["loop"]["aborted"]`. `DMSafetyBounds.check` itself still
+raises (manual_poke and direct users keep fail-loud semantics), and
+the 80% warn threshold is unchanged.

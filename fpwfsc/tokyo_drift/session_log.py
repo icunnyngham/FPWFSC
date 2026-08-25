@@ -20,9 +20,13 @@ Layout::
     │   ├── processed.fits     preprocessed crop the predictor saw
     │   ├── camera_raw.fits    pre-reduction readout cube, native dtype
     │   │                      ([IO] 'save camera frames', hardware only)
-    │   └── dm_command.fits    50x50 microns command sent
+    │   ├── dm_command.fits    50x50 microns command sent
+    │   └── dm_command_refused.fits  command REFUSED by the DM safety
+    │                          bounds (never sent; only on the aborting
+    │                          iteration, which has no dm_command.fits)
     ├── iter_001/ ...
-    └── summary.json           strehl history, final state, iterations
+    └── summary.json           strehl history, final state, iterations,
+                               aborted / safety_error on a safety abort
 
 This is the offline record for "why did this run diverge": every input
 and output of every iteration, replayable against the saved config. The
@@ -89,7 +93,8 @@ class SessionLogger:
 
     def save_iteration(self, iteration, *, strehl=None, state=None,
                        prediction=None, dm_command=None, raw=None,
-                       processed=None, camera_frames=None):
+                       processed=None, camera_frames=None,
+                       dm_command_refused=None, safety_error=None):
         iter_dir = self.session_dir / f"iter_{iteration:03d}"
         os.makedirs(iter_dir, exist_ok=True)
 
@@ -103,12 +108,15 @@ class SessionLogger:
             "dm_command_rms_um": None if dm_command is None
                                  else float(np.sqrt(np.mean(
                                      np.square(dm_command)))),
+            "command_sent": dm_command_refused is None,
+            "safety_error": safety_error,
         }
         with open(iter_dir / "metadata.json", "w") as f:
             json.dump(meta, f, indent=2)
 
         for name, array in (("raw", raw), ("processed", processed),
-                            ("dm_command", dm_command)):
+                            ("dm_command", dm_command),
+                            ("dm_command_refused", dm_command_refused)):
             if array is not None:
                 fits.writeto(iter_dir / f"{name}.fits",
                              np.asarray(array, dtype=float), overwrite=True)
@@ -127,6 +135,8 @@ class SessionLogger:
                                   dtype=float).tolist(),
             "final_state": np.asarray(result.get("final_state", []),
                                       dtype=float).tolist(),
+            "aborted": result.get("aborted"),
+            "safety_error": result.get("safety_error"),
         }
         with open(self.session_dir / "summary.json", "w") as f:
             json.dump(summary, f, indent=2)

@@ -156,6 +156,23 @@ def test_hardware_repeats_zero_the_dm_between_episodes(hardware_profile):
     assert np.any(ao.commands[1] != 0) and np.any(ao.commands[3] != 0)
 
 
+def test_hardware_safety_abort_zeros_the_dm(hardware_profile):
+    """On a safety abort the refused command is never sent and the DM
+    is left zeroed - not parked on the last (near-limit) command."""
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.run import run
+    cam, ao = FakeVampires(), FakeSCEXAO()
+    cfg = _hw_config(hardware_profile,
+                     **{"DM.max actuator stroke (um)": "1e-9"})
+    result = run(cam, ao, config=cfg, configspec=SPEC)
+
+    assert result["loop"]["aborted"] == "dm_safety"
+    assert result["loop"]["iterations"] == 0
+    # The only command ever sent is the post-abort zero
+    assert len(ao.commands) == 1
+    np.testing.assert_array_equal(ao.commands[0], np.zeros((50, 50)))
+
+
 def test_hardware_branch_refuses_wrong_filter(hardware_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run

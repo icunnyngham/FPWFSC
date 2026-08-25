@@ -16,6 +16,7 @@ import datetime
 import os
 import sys
 import threading
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -142,6 +143,10 @@ class CalibrationThread(QThread):
 
 
 class AlgorithmThread(QThread):
+    # Any exception escaping run() previously killed the QThread with
+    # only a terminal traceback; surface it to the main thread instead.
+    error = pyqtSignal(str)
+
     def __init__(self, camera, aosystem, config, spec_file, my_event, plotter):
         super().__init__()
         self.camera = camera
@@ -152,12 +157,16 @@ class AlgorithmThread(QThread):
         self.plotter = plotter
 
     def run(self):
-        run(camera=self.camera,
-            aosystem=self.aosystem,
-            config=self.config,
-            configspec=self.spec_file,
-            my_event=self.my_event,
-            plotter=self.plotter)
+        try:
+            run(camera=self.camera,
+                aosystem=self.aosystem,
+                config=self.config,
+                configspec=self.spec_file,
+                my_event=self.my_event,
+                plotter=self.plotter)
+        except Exception as exc:
+            traceback.print_exc()
+            self.error.emit(f"{type(exc).__name__}: {exc}")
 
 
 class CollapsibleBox(QWidget):
@@ -1004,7 +1013,12 @@ class TokyoDriftConfigGUI(QWidget):
             my_event=self.my_event,
             plotter=self.plotter
         )
+        self.algorithm_thread.error.connect(self._on_loop_error)
         self.algorithm_thread.start()
+
+    def _on_loop_error(self, message):
+        """Loop thread died on an exception: tell the user why."""
+        QMessageBox.critical(self, "Loop stopped on an error", message)
 
     def _resolve_run_profile(self):
         """The calibration profile the loop should run with, or None to

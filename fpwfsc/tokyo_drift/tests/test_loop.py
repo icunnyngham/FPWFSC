@@ -196,16 +196,55 @@ def test_n_repeats_logs_separate_sessions(fitted_profile, tmp_path):
         np.testing.assert_allclose(rep["injected_error_coeffs"], err)
 
 
-def test_safety_bounds_trip_on_oversized_command(fitted_profile):
+def test_safety_bounds_trip_aborts_episode_with_full_forensics(
+        fitted_profile, tmp_path):
+    """A command violating the DM safety bounds is never sent, but the
+    episode ends as a structured abort (no raise) with the refused
+    command, prediction, and frames all logged."""
+    import json
     pytest.importorskip("telescope_sim")
-    from fpwfsc.tokyo_drift.dm import DMSafetyError
     from fpwfsc.tokyo_drift.run import run
     cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 3,
                          "LOOP_SETTINGS.predictor": "oracle",
                          "DM.max actuator stroke (um)": 0.001,
+                         "MODE.calibration profile": fitted_profile,
+                         "IO.save_log": True,
+                         "IO.log_path": str(tmp_path)})
+    result = run("Sim", "Sim", config=cfg, configspec=SPEC)
+
+    loop = result["loop"]
+    assert loop["aborted"] == "dm_safety"
+    assert "refused" in loop["safety_error"]
+    assert loop["iterations"] == 0  # oracle trips on its first command
+
+    session, = tmp_path.glob("tokyo_drift_*")
+    with open(session / "summary.json") as f:
+        summary = json.load(f)
+    assert summary["aborted"] == "dm_safety"
+    assert summary["safety_error"] == loop["safety_error"]
+    iter_dir = session / "iter_000"
+    assert (iter_dir / "dm_command_refused.fits").is_file()
+    assert not (iter_dir / "dm_command.fits").exists()
+    with open(iter_dir / "metadata.json") as f:
+        meta = json.load(f)
+    assert meta["command_sent"] is False
+    assert meta["safety_error"] == loop["safety_error"]
+    assert meta["prediction"] is not None and meta["state"] is not None
+
+
+def test_all_episodes_aborting_stops_the_run(fitted_profile):
+    """First 3 episodes all aborting on safety = systematic problem:
+    the remaining repeats are skipped."""
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.run import run
+    cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 3,
+                         "LOOP_SETTINGS.predictor": "oracle",
+                         "DM.max actuator stroke (um)": 0.001,
+                         "SIMULATION.n repeats": "5",
                          "MODE.calibration profile": fitted_profile})
-    with pytest.raises(DMSafetyError):
-        run("Sim", "Sim", config=cfg, configspec=SPEC)
+    result = run("Sim", "Sim", config=cfg, configspec=SPEC)
+    assert len(result["repeats"]) == 3
+    assert all(r["aborted"] == "dm_safety" for r in result["repeats"])
 
 
 def test_run_requires_calibration_profile():

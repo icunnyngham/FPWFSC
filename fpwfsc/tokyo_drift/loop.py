@@ -6,8 +6,15 @@ frames plus the actuation between them, integrate the correction, ship
 it to the DM, repeat. The camera and DM enter only through
 ``take_image`` / ``send_command`` callables, so the identical loop runs
 against the bench sim and the real hardware.
+
+A command that violates the DM safety bounds is never sent; the loop
+records the refused command (via the iteration callback) and ends the
+episode with a structured ``aborted`` result instead of raising, so the
+session log stays complete and repeated episodes can continue.
 """
 import numpy as np
+
+from .dm import DMSafetyError
 
 
 def peak_flux_ratio(frame):
@@ -97,11 +104,18 @@ def run_closed_loop(take_image, send_command, predictor, translator,
     Returns
     -------
     dict with ``strehls`` (NaN-padded history), ``states`` (per-iter
-    integrator state), ``final_state``, ``iterations`` completed.
+    integrator state), ``final_state``, ``iterations`` completed,
+    ``aborted`` (None, or ``"dm_safety"`` when a command violated the
+    safety bounds and the episode ended early) and ``safety_error``
+    (the refusal message). On a safety abort the violating command was
+    computed but never sent; the integrator state already includes the
+    refused update.
     """
     n_modes = translator.n_modes
     strehls = np.full(n_iter, np.nan)
     states = np.zeros((n_iter, n_modes))
+    aborted = None
+    safety_error = None
 
     raw = take_image(average)
     prev_frame = _normalize(preprocess.process(raw, normalize=False))
@@ -114,8 +128,20 @@ def run_closed_loop(take_image, send_command, predictor, translator,
         move = np.asarray(initial_move, dtype=float).reshape(n_modes)
         integrator.state = move.copy()
         command = translator.command_microns(integrator.state)
-        if safety is not None:
-            safety.check(command)
+        try:
+            if safety is not None:
+                safety.check(command)
+        except DMSafetyError as exc:
+            print(f"tokyo_drift: SAFETY ABORT before iteration 1 - "
+                  f"initial diversity move refused: {exc}")
+            return {
+                "strehls": strehls,
+                "states": states,
+                "final_state": integrator.state.copy(),
+                "iterations": 0,
+                "aborted": "dm_safety",
+                "safety_error": f"initial diversity move: {exc}",
+            }
         send_command(command)
         delta_actuation = move.copy()
 
@@ -136,8 +162,31 @@ def run_closed_loop(take_image, send_command, predictor, translator,
                                        delta_actuation)
         state = integrator.update(prediction)
         command = translator.command_microns(state)
-        if safety is not None:
-            safety.check(command)
+        try:
+            if safety is not None:
+                safety.check(command)
+        except DMSafetyError as exc:
+            # Refused command is never sent; record the full forensics
+            # (frames, prediction, refused state and command) before
+            # ending the episode.
+            aborted = "dm_safety"
+            safety_error = str(exc)
+            states[i] = state
+            print(f"tokyo_drift: SAFETY ABORT at iteration "
+                  f"{i + 1}/{n_iter} - {exc}")
+            if iteration_callback is not None:
+                iteration_callback({
+                    "iteration": i,
+                    "raw": raw,
+                    "processed": processed,
+                    "prediction": prediction,
+                    "state": state,
+                    "command": command,
+                    "command_sent": False,
+                    "safety_error": safety_error,
+                    "strehl": strehls[i],
+                })
+            break
         send_command(command)
 
         delta_actuation = state - prev_state
@@ -181,6 +230,8 @@ def run_closed_loop(take_image, send_command, predictor, translator,
         "states": states,
         "final_state": integrator.state.copy(),
         "iterations": completed,
+        "aborted": aborted,
+        "safety_error": safety_error,
     }
 
 

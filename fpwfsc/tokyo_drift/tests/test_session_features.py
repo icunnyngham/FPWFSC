@@ -64,6 +64,28 @@ def test_session_logger_episode_record(tmp_path):
                        "initial_move": None}
 
 
+def test_session_logger_refused_command(tmp_path):
+    from astropy.io import fits
+    logger = SessionLogger(tmp_path, session_name="refused_session")
+    logger.save_iteration(0, dm_command_refused=np.full((50, 50), 9.0),
+                          safety_error="DM command refused: too big")
+    iter_dir = logger.session_dir / "iter_000"
+    assert (iter_dir / "dm_command_refused.fits").is_file()
+    assert not (iter_dir / "dm_command.fits").exists()
+    with open(iter_dir / "metadata.json") as f:
+        meta = json.load(f)
+    assert meta["command_sent"] is False
+    assert meta["safety_error"] == "DM command refused: too big"
+    assert meta["dm_command_rms_um"] is None
+
+    logger.finalize({"iterations": 0, "strehls": [], "final_state": [],
+                     "aborted": "dm_safety", "safety_error": "too big"})
+    with open(logger.session_dir / "summary.json") as f:
+        summary = json.load(f)
+    assert summary["aborted"] == "dm_safety"
+    assert summary["safety_error"] == "too big"
+
+
 def test_session_logger_camera_frames_keep_native_dtype(tmp_path):
     from astropy.io import fits
     logger = SessionLogger(tmp_path, session_name="cube_session")

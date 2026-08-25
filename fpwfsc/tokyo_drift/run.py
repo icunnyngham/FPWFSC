@@ -392,12 +392,16 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
             print(f"tokyo_drift: logging session to {logger.session_dir}")
 
             def iteration_callback(payload, logger=logger):
+                sent = payload.get("command_sent", True)
                 logger.save_iteration(
                     payload["iteration"],
                     strehl=payload["strehl"],
                     state=payload["state"],
                     prediction=payload["prediction"],
-                    dm_command=payload["command"],
+                    dm_command=payload["command"] if sent else None,
+                    dm_command_refused=(None if sent
+                                        else payload["command"]),
+                    safety_error=payload.get("safety_error"),
                     raw=payload["raw"],
                     processed=payload["processed"],
                     camera_frames=(Camera.last_frames
@@ -421,9 +425,35 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         result["initial_move"] = initial_move
         if logger is not None:
             logger.finalize(result)
-        print(f"tokyo_drift: loop finished after {result['iterations']} "
-              f"iterations.")
         episode_results.append(result)
+
+        if result["aborted"]:
+            # A refused command was never sent, but the last SENT command
+            # was by construction near the limits - never the state to
+            # leave parked on the DM. Zero it (a converged run, by
+            # contrast, deliberately leaves its solution on the DM for
+            # the save-flat workflow).
+            AOsystem.set_dm_data(
+                translator.command_microns(np.zeros(n_modes)))
+            print(f"tokyo_drift: episode aborted on DM safety after "
+                  f"{result['iterations']} iterations; DM zeroed "
+                  f"({result['safety_error']})")
+            # Every episode aborting from the start is systematic (bad
+            # gain / calibration), not unlucky WFE draws.
+            if (len(episode_results) == 3
+                    and all(r["aborted"] for r in episode_results)):
+                print("tokyo_drift: first 3 episodes all aborted on DM "
+                      "safety - stopping the run (check gain and "
+                      "calibration)")
+                break
+        else:
+            print(f"tokyo_drift: loop finished after "
+                  f"{result['iterations']} iterations.")
+
+    n_aborted = sum(1 for r in episode_results if r["aborted"])
+    if n_aborted and len(episode_results) > 1:
+        print(f"tokyo_drift: {n_aborted}/{len(episode_results)} episodes "
+              f"aborted on DM safety")
 
     return {"settings": settings,
             "loop": episode_results[-1] if episode_results else None,
