@@ -265,3 +265,22 @@ no camera readout; the option warns and is ignored there.
 **Bench-day note:** turn `save camera frames` ON for telescope runs —
 the cost is ~130 MB per 28-iteration run against irreplaceable bench
 time.
+
+## `[SIMULATION] n repeats` (default 1)
+
+Runs N full loop episodes back to back without rebuilding the expensive
+setup (sim construction ~5 s x2, model load ~0.5 s — amortized to
+once). Each episode: DM zeroed through the loop's own command path
+(the loop images before it commands and never resets the DM itself),
+fresh error injection (sim; `set_modal_error` replaces), fresh
+integrator + diversity move, own session directory
+(`tokyo_drift_<stamp>_rNN` — suffixed because back-to-back sessions
+would collide at the 1 s stamp resolution). Honored on hardware too:
+re-convergence statistics against the natural NCPA; note the zeroing
+discards the previous episode's converged correction from the channel
+(it stays in that session's `dm_command.fits` logs). The Strehl
+reference is computed once, before the first injection — recomputing it
+per episode on the live bench would contaminate the denominator.
+Session logs also now carry `episode.json` (episode index, injected
+error coefficients, initial diversity move) so `state[0]` is
+decomposable offline.

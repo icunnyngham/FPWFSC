@@ -210,6 +210,14 @@ config_info = {
                     "injected into the simulated bench - the "
                     "aberration the loop must correct.",
             "expert": True
+        },
+        "n repeats": {
+            "help": "Run N full loop episodes back to back, each "
+                    "logged as its own session (_rNN suffix). Setup is "
+                    "done once; per episode the DM is zeroed and a "
+                    "fresh error is injected (sim). Also works on "
+                    "hardware (re-convergence statistics).",
+            "expert": True
         }
     },
     "IO": {

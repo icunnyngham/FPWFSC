@@ -137,6 +137,25 @@ def test_hardware_branch_logs_camera_frames_and_provenance(
         assert cube.dtype == np.uint16      # native dtype, pre-reduction
 
 
+def test_hardware_repeats_zero_the_dm_between_episodes(hardware_profile):
+    """Each new episode must reset the DM through the command path: the
+    loop images before it commands, so without the zeroing the next
+    episode's first frame would see the previous converged command."""
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.run import run
+    cam, ao = FakeVampires(), FakeSCEXAO()
+    cfg = _hw_config(hardware_profile,
+                     **{"SIMULATION.n repeats": "2"})
+    result = run(cam, ao, config=cfg, configspec=SPEC)
+
+    assert len(result["repeats"]) == 2
+    # random_walk, 2 iters/episode, no initial move: commands are
+    # [ep1 iter1, ep1 iter2, ZERO, ep2 iter1, ep2 iter2]
+    assert len(ao.commands) == 5
+    np.testing.assert_array_equal(ao.commands[2], np.zeros((50, 50)))
+    assert np.any(ao.commands[1] != 0) and np.any(ao.commands[3] != 0)
+
+
 def test_hardware_branch_refuses_wrong_filter(hardware_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run

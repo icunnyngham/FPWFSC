@@ -12,6 +12,8 @@ Layout::
     ├── config.json            validated settings snapshot
     ├── calibration_profile.yaml  copy of the profile the run used
     ├── background.fits        background/dark the reducer subtracted
+    ├── episode.json           episode index, injected error coeffs
+    │                          (sim), initial diversity move
     ├── iter_000/
     │   ├── metadata.json      iteration, strehl, state, prediction, rms
     │   ├── raw.fits           frame as acquired (post-reduction)
@@ -68,6 +70,22 @@ class SessionLogger:
             fits.writeto(self.session_dir / "background.fits",
                          np.asarray(background, dtype=float),
                          overwrite=True)
+
+    def save_episode(self, *, episode=0, n_repeats=1,
+                     injected_error_coeffs=None, initial_move=None):
+        """Record the episode-level context per-iteration metadata can't
+        carry: without the injected error (sim) and the initial
+        diversity move, ``state[0]`` is not decomposable offline."""
+        episode_info = {
+            "episode": int(episode),
+            "n_repeats": int(n_repeats),
+            "injected_error_coeffs": None if injected_error_coeffs is None
+            else np.asarray(injected_error_coeffs).tolist(),
+            "initial_move": None if initial_move is None
+            else np.asarray(initial_move).tolist(),
+        }
+        with open(self.session_dir / "episode.json", "w") as f:
+            json.dump(episode_info, f, indent=2)
 
     def save_iteration(self, iteration, *, strehl=None, state=None,
                        prediction=None, dm_command=None, raw=None,

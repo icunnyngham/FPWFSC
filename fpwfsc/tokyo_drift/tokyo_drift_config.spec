@@ -52,6 +52,12 @@
     seed              = integer_or_none(default=None)
     wfe seed          = integer_or_none(default=None)
     initial error rms = float(min=0, default=0.15)
+    # Run N full loop episodes back to back, each logged as its own
+    # session. The expensive setup (sim build, model load) happens once;
+    # per episode the DM is zeroed, a fresh error is injected (sim), and
+    # the integrator restarts. Honored on hardware too (re-convergence
+    # statistics against the bench's natural NCPA).
+    n repeats         = integer(min=1, default=1)
 
 [CAMERA CALIBRATION]
     background file = string(default='')

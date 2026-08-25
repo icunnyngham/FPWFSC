@@ -10,6 +10,7 @@ the other FPWFSC pipelines: ``run()`` reads a validated .ini config and
 executes the control loop; the GUI, the command line, and notebooks all
 call this same function.
 """
+import datetime
 import re
 import sys
 import threading
@@ -131,6 +132,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     seed = settings['SIMULATION']['seed']
     wfe_seed = settings['SIMULATION']['wfe seed']
     initial_error_rms = settings['SIMULATION']['initial error rms']
+    n_repeats = settings['SIMULATION']['n repeats']
 
     flux_exponent = settings['SNR']['int phot flux exponent']
     frames_to_average = settings['SNR']['frames to average']
@@ -285,31 +287,15 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         def strehl_fn(frame):
             return peak_flux_ratio(frame) / reference_ratio
 
-    # Inject the hidden wavefront error the loop must correct (sim
-    # only) — an EXTERNAL (NCPA-like) aberration in the training modal
-    # basis, NOT routed through the DM: cancelling it requires the DM's
-    # effective command-to-wavefront gain, which is what the calibrated
-    # dm_scale measures (the same physics the real bench absorbed into
-    # dm_actuate_scale ~1.4e-6 against a 1e-6 nominal). On hardware the
-    # real NCPA plays this role and nothing is injected.
-    if sim_mode:
-        error_coeffs = rng.normal(0.0, initial_error_rms, n_modes)
-        bench.set_modal_error(error_coeffs)
-    else:
-        error_coeffs = None
-
-    integrator = LeakyIntegrator(n_modes, gain=gain, leak=leak_factor)
-    # The NN needs a known diversity move before its first prediction (two
-    # otherwise-identical frames carry no temporal cue); the dummy
-    # predictors ignore actuation, so they run with no initial move.
-    initial_move = None
+    # Predictors whose construction is expensive or stateless are built
+    # once and shared across episodes; the oracle is rebuilt per episode
+    # (its closure must track that episode's error and integrator).
     if predictor_name == 'oracle':
         if not sim_mode:
             raise ValueError(
                 "the 'oracle' predictor needs the sim's injected truth; "
                 "on hardware use predictor = 'model'")
-        predictor = CheatingOracle(
-            residual_fn=lambda: error_coeffs + integrator.state, rng=rng)
+        predictor = None
     elif predictor_name == 'random_walk':
         predictor = RandomWalkPredictor(n_modes, rng=rng)
     elif predictor_name == 'model':
@@ -318,7 +304,6 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         print(f"tokyo_drift: loaded model checkpoint "
               f"(run {predictor.run_id}, {predictor.n_modes} modes) on "
               f"device {model_device}")
-        initial_move = rng.normal(0.0, model_initial_move_sigma, n_modes)
     else:
         raise ValueError(f"unknown predictor {predictor_name!r}")
 
@@ -335,49 +320,115 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
               "pre-reduction readouts are available (sim / hitchhiker / "
               "camera without last_frames); ignoring")
 
-    logger = None
-    iteration_callback = None
-    if save_log:
-        from .session_log import SessionLogger
-        logger = SessionLogger(log_path, settings=settings)
-        # The profile and the subtracted background travel with the log:
-        # config.json holds the profile only by path (possibly a GUI
-        # tempfile), and the dark's shm buffer gets overwritten.
-        logger.save_provenance(profile_path=calibration_profile,
-                               background=bgds['bkgd'])
-        print(f"tokyo_drift: logging session to {logger.session_dir}")
+    # One stamp for the whole invocation: repeated episodes get _rNN
+    # suffixes under it, so back-to-back sessions (well under the 1 s
+    # stamp resolution once setup is amortized) can never collide.
+    session_stamp = datetime.datetime.now().strftime(
+        "tokyo_drift_%Y-%m-%dT%H-%M-%S")
 
-        def iteration_callback(payload):
-            logger.save_iteration(
-                payload["iteration"],
-                strehl=payload["strehl"],
-                state=payload["state"],
-                prediction=payload["prediction"],
-                dm_command=payload["command"],
-                raw=payload["raw"],
-                processed=payload["processed"],
-                camera_frames=(Camera.last_frames
-                               if save_camera_frames else None),
-            )
+    # ------------------------------------------------------------------
+    # Episodes: [SIMULATION] 'n repeats' full loop runs against the
+    # backends built above. Each episode is logged as its own session.
+    # ------------------------------------------------------------------
+    episode_results = []
+    error_coeffs = None
+    for episode in range(n_repeats):
+        if my_event.is_set():
+            break
+        if n_repeats > 1:
+            print(f"tokyo_drift: episode {episode + 1}/{n_repeats}")
+        if episode > 0:
+            # The loop images before it commands and never resets the
+            # DM, so each new episode must start it from zero (through
+            # the loop's own command path).
+            AOsystem.set_dm_data(
+                translator.command_microns(np.zeros(n_modes)))
 
-    result = run_closed_loop(
-        take_image, AOsystem.set_dm_data,
-        predictor, translator, integrator, preprocess, n_iter,
-        safety=safety,
-        average=frames_to_average,
-        initial_move=initial_move,
-        strehl_fn=strehl_fn,
-        strehl_early_stop=strehl_early_stop,
-        stop_event=my_event,
-        plotter=plotter,
-        ideal_psf=ideal.reference_psf,
-        iteration_callback=iteration_callback,
-    )
-    if logger is not None:
-        logger.finalize(result)
-    print(f"tokyo_drift: loop finished after {result['iterations']} "
-          f"iterations.")
-    return {"settings": settings, "loop": result, "truth": truth,
+        # Inject the hidden wavefront error the loop must correct (sim
+        # only) — an EXTERNAL (NCPA-like) aberration in the training
+        # modal basis, NOT routed through the DM: cancelling it requires
+        # the DM's effective command-to-wavefront gain, which is what
+        # the calibrated dm_scale measures (the same physics the real
+        # bench absorbed into dm_actuate_scale ~1.4e-6 against a 1e-6
+        # nominal). set_modal_error replaces the previous episode's
+        # error. On hardware the real NCPA plays this role and nothing
+        # is injected.
+        if sim_mode:
+            error_coeffs = rng.normal(0.0, initial_error_rms, n_modes)
+            bench.set_modal_error(error_coeffs)
+
+        integrator = LeakyIntegrator(n_modes, gain=gain, leak=leak_factor)
+        # The NN needs a known diversity move before its first
+        # prediction (two otherwise-identical frames carry no temporal
+        # cue); the dummy predictors ignore actuation, so they run with
+        # no initial move.
+        initial_move = None
+        if predictor_name == 'oracle':
+            predictor = CheatingOracle(
+                residual_fn=lambda ec=error_coeffs, it=integrator:
+                    ec + it.state,
+                rng=rng)
+        elif predictor_name == 'model':
+            initial_move = rng.normal(0.0, model_initial_move_sigma,
+                                      n_modes)
+
+        logger = None
+        iteration_callback = None
+        if save_log:
+            from .session_log import SessionLogger
+            session_name = (f"{session_stamp}_r{episode:02d}"
+                            if n_repeats > 1 else session_stamp)
+            logger = SessionLogger(log_path, settings=settings,
+                                   session_name=session_name)
+            # The profile and the subtracted background travel with the
+            # log: config.json holds the profile only by path (possibly
+            # a GUI tempfile), and the dark's shm buffer gets
+            # overwritten.
+            logger.save_provenance(profile_path=calibration_profile,
+                                   background=bgds['bkgd'])
+            logger.save_episode(episode=episode, n_repeats=n_repeats,
+                                injected_error_coeffs=error_coeffs,
+                                initial_move=initial_move)
+            print(f"tokyo_drift: logging session to {logger.session_dir}")
+
+            def iteration_callback(payload, logger=logger):
+                logger.save_iteration(
+                    payload["iteration"],
+                    strehl=payload["strehl"],
+                    state=payload["state"],
+                    prediction=payload["prediction"],
+                    dm_command=payload["command"],
+                    raw=payload["raw"],
+                    processed=payload["processed"],
+                    camera_frames=(Camera.last_frames
+                                   if save_camera_frames else None),
+                )
+
+        result = run_closed_loop(
+            take_image, AOsystem.set_dm_data,
+            predictor, translator, integrator, preprocess, n_iter,
+            safety=safety,
+            average=frames_to_average,
+            initial_move=initial_move,
+            strehl_fn=strehl_fn,
+            strehl_early_stop=strehl_early_stop,
+            stop_event=my_event,
+            plotter=plotter,
+            ideal_psf=ideal.reference_psf,
+            iteration_callback=iteration_callback,
+        )
+        result["injected_error_coeffs"] = error_coeffs
+        result["initial_move"] = initial_move
+        if logger is not None:
+            logger.finalize(result)
+        print(f"tokyo_drift: loop finished after {result['iterations']} "
+              f"iterations.")
+        episode_results.append(result)
+
+    return {"settings": settings,
+            "loop": episode_results[-1] if episode_results else None,
+            "repeats": episode_results,
+            "truth": truth,
             "injected_error_coeffs": error_coeffs}
 
 

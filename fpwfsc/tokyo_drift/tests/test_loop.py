@@ -160,6 +160,42 @@ def test_random_walk_loop_does_not_converge_and_logs(fitted_profile,
         Path(fitted_profile).read_text()
 
 
+def test_n_repeats_logs_separate_sessions(fitted_profile, tmp_path):
+    """[SIMULATION] 'n repeats' reuses the built bench but logs each
+    episode as its own session with a fresh injected error."""
+    import json
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.run import run
+    cfg = _sim_config(**{"LOOP_SETTINGS.N iter": 2,
+                         "LOOP_SETTINGS.predictor": "random_walk",
+                         "MODE.calibration profile": fitted_profile,
+                         "SIMULATION.n repeats": "3",
+                         "SIMULATION.wfe seed": "5",
+                         "IO.save_log": True,
+                         "IO.log_path": str(tmp_path)})
+    result = run("Sim", "Sim", config=cfg, configspec=SPEC)
+
+    assert len(result["repeats"]) == 3
+    assert result["loop"] is result["repeats"][-1]
+
+    sessions = sorted(tmp_path.glob("tokyo_drift_*"))
+    assert len(sessions) == 3
+    assert [s.name[-4:] for s in sessions] == ["_r00", "_r01", "_r02"]
+    errors = []
+    for session in sessions:
+        with open(session / "episode.json") as f:
+            episode = json.load(f)
+        assert episode["n_repeats"] == 3
+        errors.append(episode["injected_error_coeffs"])
+        assert (session / "summary.json").is_file()
+        assert (session / "iter_001" / "dm_command.fits").is_file()
+    # Each episode fights its own error draw
+    assert errors[0] != errors[1] and errors[1] != errors[2]
+    # ... and the loop results record the same draws
+    for rep, err in zip(result["repeats"], errors):
+        np.testing.assert_allclose(rep["injected_error_coeffs"], err)
+
+
 def test_safety_bounds_trip_on_oversized_command(fitted_profile):
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.dm import DMSafetyError

@@ -52,6 +52,18 @@ def test_session_logger_provenance(tmp_path):
     assert not (logger2.session_dir / "background.fits").exists()
 
 
+def test_session_logger_episode_record(tmp_path):
+    logger = SessionLogger(tmp_path, session_name="episode_session")
+    logger.save_episode(episode=2, n_repeats=5,
+                        injected_error_coeffs=np.arange(3.0),
+                        initial_move=None)
+    with open(logger.session_dir / "episode.json") as f:
+        episode = json.load(f)
+    assert episode == {"episode": 2, "n_repeats": 5,
+                       "injected_error_coeffs": [0.0, 1.0, 2.0],
+                       "initial_move": None}
+
+
 def test_session_logger_camera_frames_keep_native_dtype(tmp_path):
     from astropy.io import fits
     logger = SessionLogger(tmp_path, session_name="cube_session")
