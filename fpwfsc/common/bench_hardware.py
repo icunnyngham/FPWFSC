@@ -1,26 +1,38 @@
 
 import sys
-sys.path.insert(0, '/usr/local/home/mcisse/PyAO/')
-import ipdb
+import time
 import warnings
 import hcipy
 import numpy as np
-from aoscripts.ao_systems.k2ao import K2AO as KeckAO
-from aosys.nirc2.nirc2 import Nirc2 as NIRC2
-from aoscripts.reconstructor_manager.reconstructor_manager import ReconstructorManager
-try:
-    import numpy
 
-    
+try:  # KECK
+    sys.path.insert(0, '/usr/local/home/mcisse/PyAO/')
+    import ipdb
+    from aoscripts.ao_systems.k2ao import K2AO as KeckAO
+    from aosys.nirc2.nirc2 import Nirc2 as NIRC2
+    from aoscripts.reconstructor_manager.reconstructor_manager import ReconstructorManager
+
     #from guis.fast_and_furious.hardware import NIRC2, OSIRIS, KeckAO
     #import aosys.xinetics_deformable_mirror as xd
     #from aosys.shwfs.shwfs import SHWFS
     #from aosys.shwfs_field_steering_mirror.shwfs_field_steering_mirror import SHWFSFieldSteeringMirror
     #from aosys.rotator.rotator import Rotator
-    
+
 except ImportError:
-    warnings.warn("Failed to import hardware modules")
-    
+    warnings.warn("Failed to import KECK hardware modules")
+
+try:  # SUBARU
+    from pyMilk.interfacing.isio_shmlib import SHM as shm
+    from ..common import support_functions as sf
+    try:
+        import vampires_control as vctrl
+        from vampires_control import filters
+    except ImportError:
+        warnings.warn("Failed to import VAMPIRES control libraries")
+except ImportError:
+    warnings.warn("Failed to import SUBARU-specific libraries")
+
+
 class OSIRISAlias:
     """
     OSIRIS Alias to make image aquisition compatible with FPWFSC API
@@ -172,55 +184,60 @@ class ClosedAOSystemAlias:
 class Vampires:
     """
     wrapper for vampires commands that already exist
+
+    ``take_image`` returns RAW frames (no dark subtraction): the
+    tokyo_drift pipeline wires the fetched dark into its frame reducer
+    so background handling happens in exactly one place. Use
+    ``fetch_dark()`` to (re)load the ``vcam1_dark`` shm frame; the
+    result is exposed as ``self.dark`` / ``self.dark_info`` for callers.
     """
 
-    def __init__(self):
+    def __init__(self, camera_stream="vcam1", dark_stream="vcam1_dark"):
 
-        self.vcam = shm("vcam1") ##
+        self.vcam = shm(camera_stream) ##
+        self.dark_stream_name = dark_stream
+        self.dark = None
+        self.dark_info = "not fetched"
+        try:
+            self.fetch_dark()
+        except Exception:
+            warnings.warn(f"No dark available on shm stream "
+                          f"{self.dark_stream_name!r}; frames will be raw")
 
+        self.get_parameters()
 
-        # self.filter_name = self.nirc2.get_filters_names()
-        # self.wavelength = self.nirc2.get_effective_wavelength()
-        # self.pupil_mask_name = self.choose_mask(self.nirc2.get_pupil_mask_name())
-        # self.pixel_scale = self.nirc2.get_pixel_scale()
-        # self.camera_mode = self.nirc2.get_camera_mode()
-        # self.xsize = self.nirc2.get_roi_width()
-        # self.ysize = self.nirc2.get_roi_height()
+    def fetch_dark(self):
+        """(Re)read the dark frame from its shm stream.
 
+        The dark is a static frame someone wrote before the run, so read
+        whatever is in the buffer now (check=False) rather than waiting
+        for a fresh write. Raises on failure; sets ``self.dark`` and a
+        human-readable ``self.dark_info`` on success.
+        """
+        dark_shm = shm(self.dark_stream_name)
+        self.dark = dark_shm.get_data(check=False).astype(float)
+        self.dark_info = (f"{self.dark.shape[1]}x{self.dark.shape[0]} "
+                          f"from {self.dark_stream_name!r} at "
+                          f"{time.strftime('%H:%M:%S')}")
+        return self.dark
+
+    def get_parameters(self, test_time=None):
+        """
+        Reads in the current VAMPIRES values and sets them to appropriate variables
+        """
         # Get keywords from the VAMPIRES shm
         shmkwds = self.vcam.get_keywords()
         # Get current filter + dictionnary
         self.filter_name = shmkwds["FILTER01"].strip()
-        self.filter_v,self.dict_v = filters.get_filter_info_dict(self.filter_name)
-        # Set current wavelength
-        self.wavelength = self.dict_v['WAVEAVE']*1e-9
-        self.pupil_mask_name = 'subaru'
-        self.pixel_scale = 5.9 # need to confirm with Miles
-        self.camera_mode = 'standard'
-        self.xsize = 536 # check with miles if we can do subwindow
-        self.ysize = 536
-
-        pass
-
-    def get_parameters(self, test_time):
-        """
-        Reads in the current NIRC2 values and sets them to appropriate variables
-        """
-
-        # self.filter_name = self.nirc2.get_filters_names()
-        # self.wavelength = self.nirc2.get_effective_wavelength()
-        # self.pupil_mask_name = self.choose_mask(self.nirc2.get_pupil_mask_name(), test_time)
-        # self.pixel_scale = self.nirc2.get_pixel_scale()
-        # self.camera_mode = self.nirc2.get_camera_mode()
-        # self.xsize = self.nirc2.get_roi_width()
-        # self.ysize = self.nirc2.get_roi_height()
-                # Get keywords from the VAMPIRES shm
-        shmkwds = self.vcam.get_keywords()
-        # Get current filter + dictionnary
-        self.filter_name = shmkwds["FILTER01"].strip()
-        self.filter_v,self.dict_v = filters.get_filter_info_dict(self.filter_name)
-        # Set current wavelength
-        self.wavelength = self.dict_v['WAVEAVE']*1e-9
+        try:
+            self.filter_v, self.dict_v = filters.get_filter_info_dict(self.filter_name)
+            # Set current wavelength
+            self.wavelength = self.dict_v['WAVEAVE']*1e-9
+        except NameError:
+            warnings.warn("vampires_control not importable; filter "
+                          "wavelength lookup unavailable")
+            self.filter_v, self.dict_v = None, None
+            self.wavelength = None
         self.pupil_mask_name = 'subaru'
         self.pixel_scale = 5.9 # need to confirm with Miles
         self.camera_mode = 'standard'
@@ -264,19 +281,28 @@ class Vampires:
 
     def take_image(self, average = 1):
         """
-        Initiate a NIRC2 image with the currently set parameters
+        Take a raw VAMPIRES frame; ``average=N`` waits for and means N
+        successive fresh frames (honoring the requested count).
+
+        pyMilk note: modern ``get_data`` is ``(check, timeout, ...)`` —
+        the old xaosim-style ``get_data(True, True, timeout=1.)`` raises
+        TypeError. ``check=True`` waits for a frame written after the
+        call, which is what a loop iteration needs.
         """
-        if average == 1 :
-            image = self.vcam.get_data(True, True, timeout = 1.).astype(float)
+        average = int(average)
+        if average <= 1:
+            image = self.vcam.get_data(check=True, timeout=1.).astype(float)
+        elif hasattr(self.vcam, 'multi_recv_data'):
+            # Synchronous grab of N successive frames (pyMilk primitive)
+            cube = self.vcam.multi_recv_data(average, output_as_cube=True,
+                                             timeout=5.)
+            image = np.mean(np.asarray(cube, dtype=float), axis=0)
         else:
             im = []
-            for i in range(50):
-                im.append(self.vcam.get_data(True, True, timeout = 1.).astype(float))
-            im = np.array(im)
-            image = np.mean(im, axis=0)
-
-
-
+            for i in range(average):
+                im.append(self.vcam.get_data(check=True,
+                                             timeout=1.).astype(float))
+            image = np.mean(np.array(im), axis=0)
 
         return image
 
@@ -386,32 +412,44 @@ class Palila:
 
 
 class SCEXAO:
+    """SCExAO DM interface: writes 50x50 commands (microns of surface,
+    float32) to a MILK shared-memory DM channel.
 
-    def __init__(self):
-        """
-        Basic description of the function.
-        """
+    ``set_dm_data`` takes the RAW 50x50 command array and ships it
+    as-is — this is the contract the tokyo_drift pipeline (and the 2024
+    bench sessions) were built on. NOTE: the FnF deployment running at
+    Subaru carries an uncommitted local edit where ``set_dm_data(phase)``
+    runs ``make_dm_command`` internally; on this branch that conversion
+    stays explicit — call ``make_dm_command`` yourself if you start from
+    a full-pupil phase Field (as fnf does).
 
-        # self.shwfs = ShwfsCommands(prefix="k2")
-        # self.xinetics = XineticsDeformableMirrorCommands(prefix="k2")
+    ``dm_channel`` selects the DMcomb channel; ``dm00disp04`` is what
+    the current FnF deployment uses (the May 2024 sessions used
+    ``dm00disp02``, so keep it configurable).
+    """
 
-        # self.default_cog = self.shwfs.get_default_centroid_origins_filename()
-        # self.current_cog = self.shwfs.get_centroid_origins()
-
-
-
+    def __init__(self, dm_channel="dm00disp04",
+                 rotation_angle_dm=0, flip_x=False, flip_y=False):
         self.save_cog_name = ""
         self.load_cog_name = ""
 
         self.dm_command = np.zeros(1)
 
-        self.dm=shm("dm00disp04")
+        self.dm_channel = dm_channel
+        self.dm = shm(dm_channel)
 
         self.diameter = 44
         self.center = [24,23]
         self.actuator_num = [50,50]
+        # rotation_angle_dm is accepted for fnf-GUI compatibility, but
+        # the flight-proven deployment forces it to 0 (aperture rotation
+        # is carried in the optical model instead); flips are honored by
+        # make_dm_command. tokyo_drift uses neither — its TranslationDM
+        # bakes rotation/flips into the command upstream of this class.
         # self.rotation_angle_dm = 6.25
         self.rotation_angle_dm = 0.
+        self.flip_x = flip_x
+        self.flip_y = flip_y
 
 
     def make_dm_command(self, phase):
@@ -461,6 +499,17 @@ class SCEXAO:
             # rotating the resampled phase
             phase_resampled = hcipy.Field(sf.cen_rot(phase_resampled.shaped, self.rotation_angle_dm,
                                                      np.array([self.center[1], self.center[0]])).ravel(), grid)
+
+            # flips as deployed at Subaru (note the quirky axis naming
+            # is theirs: flip_x mirrors rows, flip_y mirrors columns)
+            if self.flip_x:
+                grid = phase_resampled.grid
+                phase_resampled = hcipy.Field(
+                    np.flip(phase_resampled.shaped, axis=0).ravel(), grid)
+            if self.flip_y:
+                grid = phase_resampled.grid
+                phase_resampled = hcipy.Field(
+                    np.flip(phase_resampled.shaped, axis=1).ravel(), grid)
         else:
             pass
             #phase_resampled = phase_resampled.shaped
