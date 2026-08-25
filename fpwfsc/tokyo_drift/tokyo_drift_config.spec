@@ -67,5 +67,9 @@
 [IO]
     save_log        = boolean(default=False)
     log_path        = string(default='')
+    # Also save each iteration's pre-reduction readout cube
+    # (camera_raw.fits, native dtype) - real hardware only, needs a
+    # camera wrapper exposing `last_frames` (Vampires does).
+    save camera frames = boolean(default=False)
     hitchhiker mode = boolean(default=False)
     hitchhiker path = string(default='')

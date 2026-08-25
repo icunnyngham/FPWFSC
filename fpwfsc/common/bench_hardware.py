@@ -198,6 +198,10 @@ class Vampires:
         self.dark_stream_name = dark_stream
         self.dark = None
         self.dark_info = "not fetched"
+        # Individual readouts of the most recent take_image call, native
+        # dtype, shape (N, y, x) - session logging saves these when
+        # [IO] 'save camera frames' is on.
+        self.last_frames = None
         try:
             self.fetch_dark()
         except Exception:
@@ -291,18 +295,20 @@ class Vampires:
         """
         average = int(average)
         if average <= 1:
-            image = self.vcam.get_data(check=True, timeout=1.).astype(float)
+            frame = self.vcam.get_data(check=True, timeout=1.)
+            self.last_frames = np.asarray(frame)[np.newaxis]
+            image = np.asarray(frame, dtype=float)
         elif hasattr(self.vcam, 'multi_recv_data'):
             # Synchronous grab of N successive frames (pyMilk primitive)
             cube = self.vcam.multi_recv_data(average, output_as_cube=True,
                                              timeout=5.)
+            self.last_frames = np.asarray(cube)
             image = np.mean(np.asarray(cube, dtype=float), axis=0)
         else:
-            im = []
-            for i in range(average):
-                im.append(self.vcam.get_data(check=True,
-                                             timeout=1.).astype(float))
-            image = np.mean(np.array(im), axis=0)
+            im = [self.vcam.get_data(check=True, timeout=1.)
+                  for _ in range(average)]
+            self.last_frames = np.asarray(im)
+            image = np.mean(np.asarray(im, dtype=float), axis=0)
 
         return image
 

@@ -224,6 +224,14 @@ config_info = {
             "directory": True,
             "expert": True
         },
+        "save camera frames": {
+            "help": "Also save each iteration's individual "
+                    "pre-reduction camera readouts (native dtype) as "
+                    "camera_raw.fits - real hardware only, ~5 MB per "
+                    "iteration on VAMPIRES. Lets frames be re-reduced "
+                    "offline (striping, dark quality).",
+            "expert": True
+        },
         "hitchhiker mode": {
             "help": "Read frames from a watched directory of FITS "
                     "files instead of the camera (archive replay / "

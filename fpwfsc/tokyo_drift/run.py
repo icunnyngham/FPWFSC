@@ -148,6 +148,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
 
     save_log = settings['IO']['save_log']
     log_path = settings['IO']['log_path']
+    save_camera_frames = settings['IO']['save camera frames']
     hitchhiker_mode = settings['IO']['hitchhiker mode']
     hitchhiker_path = settings['IO']['hitchhiker path']
 
@@ -324,11 +325,26 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     safety = DMSafetyBounds(max_ptv_um=max_ptv_um,
                             max_stroke_um=max_stroke_um)
 
+    # Pre-reduction readout cubes only exist where a camera wrapper
+    # exposes them (Vampires stashes each grab as `last_frames`); in sim
+    # and hitchhiker mode there is no camera readout to keep.
+    if save_camera_frames and (sim_mode or hitchhiker_mode
+                               or not hasattr(Camera, 'last_frames')):
+        save_camera_frames = False
+        print("tokyo_drift: WARNING - 'save camera frames' is on but no "
+              "pre-reduction readouts are available (sim / hitchhiker / "
+              "camera without last_frames); ignoring")
+
     logger = None
     iteration_callback = None
     if save_log:
         from .session_log import SessionLogger
         logger = SessionLogger(log_path, settings=settings)
+        # The profile and the subtracted background travel with the log:
+        # config.json holds the profile only by path (possibly a GUI
+        # tempfile), and the dark's shm buffer gets overwritten.
+        logger.save_provenance(profile_path=calibration_profile,
+                               background=bgds['bkgd'])
         print(f"tokyo_drift: logging session to {logger.session_dir}")
 
         def iteration_callback(payload):
@@ -340,6 +356,8 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
                 dm_command=payload["command"],
                 raw=payload["raw"],
                 processed=payload["processed"],
+                camera_frames=(Camera.last_frames
+                               if save_camera_frames else None),
             )
 
     result = run_closed_loop(

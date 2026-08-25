@@ -154,6 +154,10 @@ def test_random_walk_loop_does_not_converge_and_logs(fitted_profile,
     iter_dirs = sorted(p.name for p in session.glob("iter_*"))
     assert iter_dirs == [f"iter_{i:03d}" for i in range(5)]
     assert (session / "iter_000" / "dm_command.fits").is_file()
+    # Provenance travels with the log: the profile is copied in (its
+    # config.json entry is only a path, possibly a GUI tempfile).
+    assert (session / "calibration_profile.yaml").read_text() == \
+        Path(fitted_profile).read_text()
 
 
 def test_safety_bounds_trip_on_oversized_command(fitted_profile):

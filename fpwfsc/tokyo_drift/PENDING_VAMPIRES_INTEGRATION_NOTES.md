@@ -234,3 +234,34 @@ which is strictly read-only):
 - fnf untouched (still Keck-shaped; would need a per-instrument branch
   to run at Subaru — upstream's call).
 - No changes to qacits / san / satellite.
+
+# 2026-08-24 update — session-log provenance + raw readout capture
+
+Two log-completeness gaps closed ahead of the bench run:
+
+## Session logs are now self-describing
+
+Every logged run copies its calibration profile into the session
+directory (`calibration_profile.yaml`) and saves the background/dark
+frame the reducer actually subtracted (`background.fits`).
+Previously `config.json` recorded the profile only by *path* — for GUI
+"run with unsaved parameters" sessions that path is an ephemeral
+tempfile in $TMPDIR, so the raw→processed transform (image_rot_deg,
+crop center, flips) was unrecoverable from the log alone. The dark
+matters for the same reason: its shm buffer is overwritten by the next
+dark taken.
+
+## `[IO] save camera frames` (default off)
+
+On hardware, `raw.fits` is the *averaged, dark-subtracted* frame — the
+individual readouts are gone, which forecloses per-frame diagnostics
+(CMOS striping — see the deferred striping-reducer item — cosmic rays,
+dark drift) and any offline re-reduction. With the option on, each
+iteration also writes `camera_raw.fits`: the pre-reduction readout cube
+in native dtype (`Vampires` now stashes each grab as `last_frames`;
+536×536 uint16 × 8 frames ≈ 4.6 MB/iter). Sim and hitchhiker runs have
+no camera readout; the option warns and is ignored there.
+
+**Bench-day note:** turn `save camera frames` ON for telescope runs —
+the cost is ~130 MB per 28-iteration run against irreplaceable bench
+time.

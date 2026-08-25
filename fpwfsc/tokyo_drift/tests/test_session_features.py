@@ -33,6 +33,35 @@ def test_session_logger_layout(tmp_path):
     assert summary["iterations"] == 1
 
 
+def test_session_logger_provenance(tmp_path):
+    from astropy.io import fits
+    profile = tmp_path / "profile.yaml"
+    profile.write_text("mode: m\ndm_scale: 1.5\n")
+    logger = SessionLogger(tmp_path, session_name="prov_session")
+    logger.save_provenance(profile_path=profile,
+                           background=np.full((8, 8), 3.0))
+    copied = logger.session_dir / "calibration_profile.yaml"
+    assert copied.read_text() == profile.read_text()
+    np.testing.assert_array_equal(
+        fits.getdata(logger.session_dir / "background.fits"),
+        np.full((8, 8), 3.0))
+
+    # Both inputs optional (sim runs often have no background frame)
+    logger2 = SessionLogger(tmp_path, session_name="prov_session_2")
+    logger2.save_provenance(profile_path=None, background=None)
+    assert not (logger2.session_dir / "background.fits").exists()
+
+
+def test_session_logger_camera_frames_keep_native_dtype(tmp_path):
+    from astropy.io import fits
+    logger = SessionLogger(tmp_path, session_name="cube_session")
+    cube = np.arange(2 * 4 * 4, dtype=np.uint16).reshape(2, 4, 4)
+    logger.save_iteration(0, camera_frames=cube)
+    saved = fits.getdata(logger.session_dir / "iter_000" / "camera_raw.fits")
+    assert saved.dtype == np.uint16
+    np.testing.assert_array_equal(saved, cube)
+
+
 def test_session_logger_nan_strehl_serializes(tmp_path):
     logger = SessionLogger(tmp_path, session_name="nan_session")
     logger.save_iteration(0, strehl=float("nan"), state=np.zeros(3))

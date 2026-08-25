@@ -28,6 +28,7 @@ class FakeVampires:
         self.dark = np.zeros((frame_size, frame_size))
         self.dark_info = "fake dark"
         self.requested_averages = []
+        self.last_frames = None  # set by take_image, like the real class
         rng = np.random.default_rng(7)
         # A static PSF-ish frame: bright blob at the frame center.
         y, x = np.mgrid[0:frame_size, 0:frame_size]
@@ -37,6 +38,11 @@ class FakeVampires:
 
     def take_image(self, average=1):
         self.requested_averages.append(average)
+        # Mirror bench_hardware.Vampires: stash the individual native-
+        # dtype readouts of this grab as (N, y, x).
+        self.last_frames = np.repeat(
+            np.clip(self.frame, 0, None)[np.newaxis], average,
+            axis=0).astype(np.uint16)
         return self.frame.copy()
 
 
@@ -103,6 +109,32 @@ def test_hardware_branch_runs_the_loop(hardware_profile):
         assert cmd.dtype == np.float32
     # The configured frame averaging reaches the camera untouched
     assert set(cam.requested_averages) == {2}
+
+
+def test_hardware_branch_logs_camera_frames_and_provenance(
+        hardware_profile, tmp_path):
+    """[IO] 'save camera frames' writes each iteration's pre-reduction
+    readout cube in its native dtype, and every logged session carries a
+    copy of the profile plus the subtracted background."""
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.run import run
+    cam, ao = FakeVampires(), FakeSCEXAO()
+    cfg = _hw_config(hardware_profile,
+                     **{"IO.save_log": "True",
+                        "IO.log_path": str(tmp_path),
+                        "IO.save camera frames": "True"})
+    run(cam, ao, config=cfg, configspec=SPEC)
+
+    fits = pytest.importorskip("astropy.io.fits")
+    session, = tmp_path.glob("tokyo_drift_*")
+    assert (session / "calibration_profile.yaml").read_text() == \
+        Path(hardware_profile).read_text()
+    background = fits.getdata(session / "background.fits")
+    np.testing.assert_array_equal(background, cam.dark)
+    for iter_dir in sorted(session.glob("iter_*")):
+        cube = fits.getdata(iter_dir / "camera_raw.fits")
+        assert cube.shape == (2, 256, 256)  # SNR 'frames to average' = 2
+        assert cube.dtype == np.uint16      # native dtype, pre-reduction
 
 
 def test_hardware_branch_refuses_wrong_filter(hardware_profile):
