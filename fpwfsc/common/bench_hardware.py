@@ -195,6 +195,7 @@ class Vampires:
     def __init__(self, camera_stream="vcam1", dark_stream="vcam1_dark"):
 
         self.vcam = shm(camera_stream) ##
+        self.camera_stream_name = camera_stream
         self.dark_stream_name = dark_stream
         self.dark = None
         self.dark_info = "not fetched"
@@ -224,6 +225,26 @@ class Vampires:
                           f"from {self.dark_stream_name!r} at "
                           f"{time.strftime('%H:%M:%S')}")
         return self.dark
+
+    def camera_state(self):
+        """Snapshot of camera-side state for session-log provenance:
+        what the pipeline's config can't know (the camera server owns
+        exposure/gain/windowing), captured from the shm keywords."""
+        state = {
+            "camera_stream": getattr(self, "camera_stream_name", None),
+            "filter_name": getattr(self, "filter_name", None),
+            "wavelength_m": getattr(self, "wavelength", None),
+            "pixel_scale_mas": getattr(self, "pixel_scale", None),
+            "dark_stream": getattr(self, "dark_stream_name", None),
+            "dark_info": getattr(self, "dark_info", None),
+        }
+        try:
+            state["shm_keywords"] = {
+                str(k): str(v) for k, v in self.vcam.get_keywords().items()}
+        except Exception as exc:
+            state["shm_keywords"] = None
+            state["shm_keywords_error"] = f"{type(exc).__name__}: {exc}"
+        return state
 
     def get_parameters(self, test_time=None):
         """

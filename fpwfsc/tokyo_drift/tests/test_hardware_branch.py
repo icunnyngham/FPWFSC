@@ -288,6 +288,12 @@ def test_run_with_profile_by_registry_name_logs_provenance(
         copied = yaml.safe_load(
             (session / "calibration_profile.yaml").read_text())
         assert copied["dm_scale"] == profile_dict["dm_scale"]
+        # Camera-side snapshot travels with every hardware log
+        import json
+        with open(session / "camera_state.json") as f:
+            state = json.load(f)
+        assert state["filter_matched"] is True
+        assert state["dark_info"] == "fake dark"
     finally:
         delete_profile(name)
 
@@ -308,13 +314,28 @@ def test_hardware_bench_probes_respect_safety_bounds():
     assert len(ao.commands) == 1
 
 
-def test_hardware_branch_refuses_wrong_filter(hardware_profile):
+def test_hardware_branch_warns_on_wrong_filter_but_runs(hardware_profile,
+                                                        tmp_path):
+    """A filter mismatch is a PROMINENT warning, not a refusal (bench
+    keyword strings change) — and the log records what was in the
+    beam."""
+    import json
     pytest.importorskip("telescope_sim")
     from fpwfsc.tokyo_drift.run import run
     cam = FakeVampires(filter_name="675-50")  # mode is trained on F760
-    with pytest.raises(ValueError, match="does not match mode"):
-        run(cam, FakeSCEXAO(), config=_hw_config(hardware_profile),
-            configspec=SPEC)
+    cfg = _hw_config(hardware_profile,
+                     **{"IO.save_log": "True",
+                        "IO.log_path": str(tmp_path)})
+    with pytest.warns(UserWarning, match="does not match mode"):
+        result = run(cam, FakeSCEXAO(), config=cfg, configspec=SPEC)
+    assert result["loop"]["iterations"] == 2  # the run proceeded
+
+    session, = tmp_path.glob("tokyo_drift_*")
+    with open(session / "camera_state.json") as f:
+        state = json.load(f)
+    assert state["filter_name"] == "675-50"
+    assert state["mode_filter"] == "F760"
+    assert state["filter_matched"] is False
 
 
 def test_hardware_branch_refuses_oracle(hardware_profile):

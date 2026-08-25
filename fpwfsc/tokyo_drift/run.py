@@ -32,31 +32,49 @@ def _filter_number(name):
 
 
 def assert_camera_matches_mode(camera_obj, mode_name):
-    """Refuse to run a filter-specific NN against the wrong filter.
+    """Warn PROMINENTLY when a filter-specific NN runs against a
+    different filter.
 
     tokyo_drift locks wavelength / pixel scale to the trained mode
-    rather than reading camera keywords, so the one thing that MUST be
-    checked at connect time is that the camera's current filter is the
-    one the checkpoint was trained on.
+    rather than reading camera keywords, so the camera's current filter
+    is compared against the checkpoint's at connect time. A mismatch is
+    a loud warning rather than a refusal (bench keyword strings change;
+    a renamed-but-correct filter must not end a run) — the comparison
+    result is returned so the session log records what was actually in
+    the beam.
+
+    Returns ``{"want", "have", "matched"}`` (``matched`` None when the
+    comparison could not be made).
     """
+    import warnings
     from .mode_registry import load_manifest
     want = load_manifest(mode_name).get('filter')
     have = getattr(camera_obj, 'filter_name', None)
     if not want:
-        return
+        return {"want": None, "have": have, "matched": None}
     if have is None:
-        import warnings
         warnings.warn(
             f"camera exposes no filter_name; cannot verify it matches "
             f"mode {mode_name!r} (trained on {want!r})")
-        return
-    if _filter_number(want) != _filter_number(have):
-        raise ValueError(
+        return {"want": want, "have": None, "matched": None}
+    matched = _filter_number(want) == _filter_number(have)
+    if matched:
+        print(f"tokyo_drift: camera filter {have!r} matches mode filter "
+              f"{want!r}")
+    else:
+        banner = "!" * 70
+        print(banner)
+        print(f"tokyo_drift: WARNING - camera filter {have!r} does NOT "
+              f"match mode {mode_name!r} (trained on {want!r}).")
+        print("If the physical filter is right and only the keyword "
+              "changed, carry on; otherwise change the filter or pick "
+              "the matching mode. The mismatch is recorded in the "
+              "session log (camera_state.json).")
+        print(banner)
+        warnings.warn(
             f"camera filter {have!r} does not match mode {mode_name!r} "
-            f"(trained on {want!r}); change the filter or pick the "
-            f"matching mode")
-    print(f"tokyo_drift: camera filter {have!r} matches mode filter "
-          f"{want!r}")
+            f"(trained on {want!r}); proceeding anyway")
+    return {"want": want, "have": have, "matched": matched}
 
 
 def make_frame_reducer(bgds, estimate_background_from_border):
@@ -197,6 +215,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         Camera = BenchSimCamera(bench)
         AOsystem = BenchSimAO(bench)
         truth = bench.truth
+        camera_state = None
         print(f"tokyo_drift: bench-sim injected truth (sim-only): {truth}")
     else:
         # Real hardware: wrapper instances built by the caller (see
@@ -205,7 +224,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         Camera = camera
         AOsystem = aosystem
         truth = None
-        assert_camera_matches_mode(Camera, mode_name)
+        filter_check = assert_camera_matches_mode(Camera, mode_name)
         # A dark fetched from the camera's shm stream stands in for a
         # background file, unless one was configured explicitly. The
         # reducer stays the single place backgrounds get subtracted.
@@ -218,6 +237,24 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
             print("tokyo_drift: WARNING - no camera dark and no "
                   "background file; frames will be reduced without "
                   "background subtraction")
+
+        # Camera-side state for the session log: the camera server owns
+        # exposure / gain / windowing, so config.json alone cannot
+        # reconstruct the acquisition — capture what the wrapper knows,
+        # plus the filter-comparison outcome (the mismatch gate warns
+        # rather than refusing, so the log must say what was in the
+        # beam).
+        if hasattr(Camera, 'camera_state'):
+            camera_state = Camera.camera_state()
+        else:
+            camera_state = {
+                "filter_name": getattr(Camera, 'filter_name', None),
+                "wavelength_m": getattr(Camera, 'wavelength', None),
+                "pixel_scale_mas": getattr(Camera, 'pixel_scale', None),
+                "dark_info": getattr(Camera, 'dark_info', None),
+            }
+        camera_state["mode_filter"] = filter_check["want"]
+        camera_state["filter_matched"] = filter_check["matched"]
 
     # Hardware WFE injection: a second DMcomb channel carries the drawn
     # error (the DM sums its channels), so the loop fights a KNOWN
@@ -445,7 +482,8 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
                 from .calibration.profiles import resolve_profile_path
                 logger.save_provenance(
                     profile_path=resolve_profile_path(calibration_profile),
-                    background=bgds['bkgd'])
+                    background=bgds['bkgd'],
+                    camera_state=camera_state)
                 logger.save_episode(episode=episode, n_repeats=n_repeats,
                                     injected_error_coeffs=error_coeffs,
                                     initial_move=initial_move,

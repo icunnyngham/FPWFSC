@@ -12,6 +12,9 @@ Layout::
     ├── config.json            validated settings snapshot
     ├── calibration_profile.yaml  copy of the profile the run used
     ├── background.fits        background/dark the reducer subtracted
+    ├── camera_state.json      camera-side state at run start (filter,
+    │                          shm keywords, dark info, filter-vs-mode
+    │                          comparison; hardware only)
     ├── episode.json           episode index, injected error coeffs
     │                          (sim, or hardware injection), initial
     │                          diversity move
@@ -62,14 +65,16 @@ class SessionLogger:
             with open(self.session_dir / "config.json", "w") as f:
                 json.dump(snapshot, f, indent=2, default=str)
 
-    def save_provenance(self, profile_path=None, background=None):
+    def save_provenance(self, profile_path=None, background=None,
+                        camera_state=None):
         """Copy the run's calibration inputs into the session directory.
 
         ``profile_path`` is copied to ``calibration_profile.yaml`` (the
         original may be an ephemeral tempfile, or edited later);
         ``background`` is the frame the reducer actually subtracts — on
         hardware the camera dark, whose shm buffer is overwritten by the
-        next dark taken.
+        next dark taken. ``camera_state`` is the camera-side snapshot
+        (filter, shm keywords, ...) config.json cannot reconstruct.
         """
         if profile_path is not None:
             shutil.copyfile(profile_path,
@@ -78,6 +83,9 @@ class SessionLogger:
             fits.writeto(self.session_dir / "background.fits",
                          np.asarray(background, dtype=float),
                          overwrite=True)
+        if camera_state is not None:
+            with open(self.session_dir / "camera_state.json", "w") as f:
+                json.dump(camera_state, f, indent=2, default=str)
 
     def save_episode(self, *, episode=0, n_repeats=1,
                      injected_error_coeffs=None, initial_move=None,
