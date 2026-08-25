@@ -53,6 +53,7 @@ def test_session_logger_provenance(tmp_path):
 
 
 def test_session_logger_episode_record(tmp_path):
+    from astropy.io import fits
     logger = SessionLogger(tmp_path, session_name="episode_session")
     logger.save_episode(episode=2, n_repeats=5,
                         injected_error_coeffs=np.arange(3.0),
@@ -62,6 +63,15 @@ def test_session_logger_episode_record(tmp_path):
     assert episode == {"episode": 2, "n_repeats": 5,
                        "injected_error_coeffs": [0.0, 1.0, 2.0],
                        "initial_move": None}
+    # No hardware injection -> no injected_command.fits
+    assert not (logger.session_dir / "injected_command.fits").exists()
+
+    logger2 = SessionLogger(tmp_path, session_name="episode_session_2")
+    logger2.save_episode(injected_error_coeffs=np.arange(3.0),
+                         injected_command=np.full((50, 50), 0.25))
+    np.testing.assert_array_equal(
+        fits.getdata(logger2.session_dir / "injected_command.fits"),
+        np.full((50, 50), 0.25))
 
 
 def test_session_logger_refused_command(tmp_path):

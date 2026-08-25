@@ -221,7 +221,8 @@ def _read_stream(SHM, name):
 
 
 def check_hardware(report, SHM, dm_channel, mode_names,
-                   camera_stream="vcam1", dark_stream="vcam1_dark"):
+                   camera_stream="vcam1", dark_stream="vcam1_dark",
+                   injection_channel=""):
     report.section("Hardware interfaces (read-only)")
     if SHM is None:
         report.add(SKIP, "hardware", "pyMilk unavailable")
@@ -288,6 +289,28 @@ def check_hardware(report, SHM, dm_channel, mode_names,
         report.add(SKIP, f"DM channel {dm_channel!r}",
                    f"not readable ({type(e).__name__}: {e})")
 
+    # Injection channel ([SIMULATION] 'injection dm channel'): same
+    # read-only attach as the correction channel, when configured.
+    if injection_channel:
+        try:
+            _, inj_data = _read_stream(SHM, injection_channel)
+            import numpy as np
+            detail = (f"{inj_data.shape} {inj_data.dtype}, current rms "
+                      f"{float(np.std(inj_data)):.3g}")
+            if injection_channel == dm_channel:
+                report.add(FAIL, f"injection channel {injection_channel!r}",
+                           "same as the correction 'dm channel' - the "
+                           "loop would overwrite its own injection")
+            elif tuple(inj_data.shape) == (50, 50):
+                report.add(PASS, f"injection channel {injection_channel!r}",
+                           detail)
+            else:
+                report.add(FAIL, f"injection channel {injection_channel!r}",
+                           detail + " - expected (50, 50)")
+        except Exception as e:
+            report.add(SKIP, f"injection channel {injection_channel!r}",
+                       f"not readable ({type(e).__name__}: {e})")
+
     # Optional Subaru-only package
     try:
         import vampires_control  # noqa: F401
@@ -332,8 +355,10 @@ def main(argv=None):
     check_modes(report, args.mode)
 
     dm_channel = "dm00disp04"
+    injection_channel = ""
     if settings is not None:
         dm_channel = settings["DM"]["dm channel"]
+        injection_channel = settings["SIMULATION"]["injection dm channel"]
     if args.skip_hardware:
         report.section("Hardware interfaces (read-only)")
         report.add(SKIP, "hardware", "--skip-hardware")
@@ -343,7 +368,8 @@ def main(argv=None):
         mode_names = args.mode or list_modes()
         check_hardware(report, SHM, dm_channel, mode_names,
                        camera_stream=args.camera_stream,
-                       dark_stream=args.dark_stream)
+                       dark_stream=args.dark_stream,
+                       injection_channel=injection_channel)
 
     report.summary()
     return 1 if report.failed else 0

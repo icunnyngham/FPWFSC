@@ -218,6 +218,17 @@ config_info = {
                     "fresh error is injected (sim). Also works on "
                     "hardware (re-convergence statistics).",
             "expert": True
+        },
+        "injection dm channel": {
+            "help": "HARDWARE ONLY: second DMcomb channel (e.g. "
+                    "dm00disp06) that carries the drawn WFE, so "
+                    "injected-WFE runs work on the bench with the "
+                    "injection recorded in the session log. Must "
+                    "differ from the correction 'dm channel'; confirm "
+                    "the allocation with the SCExAO crew. Empty "
+                    "disables (NCPA-only); ignored in sim. Both "
+                    "channels are zeroed when an injection run ends.",
+            "expert": True
         }
     },
     "IO": {

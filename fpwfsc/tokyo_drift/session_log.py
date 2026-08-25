@@ -13,7 +13,11 @@ Layout::
     ├── calibration_profile.yaml  copy of the profile the run used
     ├── background.fits        background/dark the reducer subtracted
     ├── episode.json           episode index, injected error coeffs
-    │                          (sim), initial diversity move
+    │                          (sim, or hardware injection), initial
+    │                          diversity move
+    ├── injected_command.fits  50x50 microns injection actually written
+    │                          to the injection DM channel (hardware
+    │                          injection runs only)
     ├── iter_000/
     │   ├── metadata.json      iteration, strehl, state, prediction, rms
     │   ├── raw.fits           frame as acquired (post-reduction)
@@ -76,10 +80,14 @@ class SessionLogger:
                          overwrite=True)
 
     def save_episode(self, *, episode=0, n_repeats=1,
-                     injected_error_coeffs=None, initial_move=None):
+                     injected_error_coeffs=None, initial_move=None,
+                     injected_command=None):
         """Record the episode-level context per-iteration metadata can't
-        carry: without the injected error (sim) and the initial
-        diversity move, ``state[0]`` is not decomposable offline."""
+        carry: without the injected error (sim, or hardware injection)
+        and the initial diversity move, ``state[0]`` is not decomposable
+        offline. ``injected_command`` is the 50x50 microns command a
+        hardware injection run actually wrote to the injection channel
+        (only present when one was applied)."""
         episode_info = {
             "episode": int(episode),
             "n_repeats": int(n_repeats),
@@ -90,6 +98,10 @@ class SessionLogger:
         }
         with open(self.session_dir / "episode.json", "w") as f:
             json.dump(episode_info, f, indent=2)
+        if injected_command is not None:
+            fits.writeto(self.session_dir / "injected_command.fits",
+                         np.asarray(injected_command, dtype=float),
+                         overwrite=True)
 
     def save_iteration(self, iteration, *, strehl=None, state=None,
                        prediction=None, dm_command=None, raw=None,

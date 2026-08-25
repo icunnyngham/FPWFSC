@@ -58,6 +58,14 @@
     # the integrator restarts. Honored on hardware too (re-convergence
     # statistics against the bench's natural NCPA).
     n repeats         = integer(min=1, default=1)
+    # HARDWARE ONLY: inject the drawn WFE onto the bench through a second
+    # DMcomb channel (e.g. dm00disp06 - the DM sums its channels), so
+    # injected-WFE runs work on the real instrument with the injection
+    # recorded in episode.json / injected_command.fits. Same draw as the
+    # sim path ('initial error rms', 'wfe seed'), synthesized through the
+    # loop's own command translation. Empty disables (NCPA-only runs);
+    # ignored in sim (which injects via the optical model instead).
+    injection dm channel = string(default='')
 
 [CAMERA CALIBRATION]
     background file = string(default='')

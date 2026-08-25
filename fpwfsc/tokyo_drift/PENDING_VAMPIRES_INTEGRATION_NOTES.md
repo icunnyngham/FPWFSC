@@ -305,3 +305,41 @@ loop-thread exception as a dialog. Behavior change for scripts:
 `result["loop"]["aborted"]`. `DMSafetyBounds.check` itself still
 raises (manual_poke and direct users keep fail-loud semantics), and
 the 80% warn threshold is unchanged.
+
+## Hardware WFE injection (`[SIMULATION] injection dm channel`)
+
+Closes the gap caught the night before the bench run: injected-WFE
+statistics on hardware previously required an external tool whose
+content was invisible to the session logs. Now the pipeline itself
+injects: per episode it draws modal coefficients exactly like the sim
+path (`initial error rms`, `wfe seed`), synthesizes the 50×50 command
+through the loop's own TranslationDM (same calibrated scale, geometry,
+and taper as corrections — coefficient units match `state`, so
+final_state ≈ −injection when converged), and writes it to a SECOND
+DMcomb channel (the DM sums its channels). Recorded per session:
+`injected_error_coeffs` in episode.json (no longer null on hardware)
+and the applied command as `injected_command.fits`.
+
+Mechanics and safeguards:
+- The channel must differ from the correction `dm channel` (hard
+  ValueError; preflight also FAILs on it and otherwise read-only-checks
+  the injection stream when configured).
+- The injection command passes the DM safety bounds; a draw over the
+  limits is never sent — the episode aborts (`safety_error` says
+  "injected WFE command: ...") and later episodes continue.
+- **Zeroing:** a run with injection enabled zeroes BOTH the injection
+  and correction channels when it ends — completion, stop, abort, or
+  exception (try/finally) — because with the injection gone, the
+  converged correction would itself aberrate the bench, and it is
+  episode-specific, not a reusable flat. NCPA-only runs are unchanged
+  (converged state stays on the DM for the save-flat workflow).
+- Ignored in sim (which injects through the optical model); empty
+  disables (NCPA-only runs, episode.json null as before).
+- Injection is DM-borne (same influence functions as corrections),
+  matching the 2024 bench-session methodology — NOT the sim's external
+  (NCPA-like) error class; gain-realism analyses should note this.
+
+**Bench-day:** confirm the injection channel allocation with the SCExAO
+crew alongside the correction channel (2024 sessions used
+dm00disp02/04/08; pick a free one, e.g. dm00disp06), set it in the
+config, and run preflight — it now checks that stream too.

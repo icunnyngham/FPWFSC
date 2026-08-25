@@ -47,10 +47,18 @@ class FakeVampires:
 
 
 class FakeSCEXAO:
-    """Duck-typed stand-in for bench_hardware.SCEXAO."""
+    """Duck-typed stand-in for bench_hardware.SCEXAO.
 
-    def __init__(self):
+    Instances register themselves so tests can reach the injection
+    wrapper run() auto-builds via ``type(aosystem)(dm_channel=...)``.
+    """
+
+    instances = []
+
+    def __init__(self, dm_channel="dm00disp04"):
+        self.dm_channel = dm_channel
         self.commands = []
+        FakeSCEXAO.instances.append(self)
 
     def set_dm_data(self, command):
         self.commands.append(np.asarray(command))
@@ -171,6 +179,84 @@ def test_hardware_safety_abort_zeros_the_dm(hardware_profile):
     # The only command ever sent is the post-abort zero
     assert len(ao.commands) == 1
     np.testing.assert_array_equal(ao.commands[0], np.zeros((50, 50)))
+
+
+def test_hardware_wfe_injection_records_and_zeros(hardware_profile,
+                                                  tmp_path):
+    """[SIMULATION] 'injection dm channel': per episode the drawn WFE
+    goes out on the second channel and into the log; when the run ends
+    BOTH channels are zeroed."""
+    import json
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.run import run
+    FakeSCEXAO.instances.clear()
+    cam, ao = FakeVampires(), FakeSCEXAO()
+    cfg = _hw_config(hardware_profile,
+                     **{"SIMULATION.n repeats": "2",
+                        "SIMULATION.injection dm channel": "dm00disp06",
+                        "SIMULATION.initial error rms": "0.05",
+                        "SIMULATION.wfe seed": "3",
+                        "IO.save_log": "True",
+                        "IO.log_path": str(tmp_path)})
+    result = run(cam, ao, config=cfg, configspec=SPEC)
+
+    # run() auto-built the injector as type(aosystem)(dm_channel=...)
+    injector, = [i for i in FakeSCEXAO.instances
+                 if i.dm_channel == "dm00disp06"]
+    # One injection per episode, then the end-of-run zero
+    assert len(injector.commands) == 3
+    assert np.any(injector.commands[0] != 0)
+    assert np.any(injector.commands[1] != 0)
+    assert np.any(injector.commands[0] != injector.commands[1])
+    np.testing.assert_array_equal(injector.commands[2], np.zeros((50, 50)))
+    # Correction channel also ends zeroed (injection-specific solution)
+    np.testing.assert_array_equal(ao.commands[-1], np.zeros((50, 50)))
+
+    # Coefficients are recorded per episode - no longer null on hardware
+    assert len(result["repeats"]) == 2
+    fits = pytest.importorskip("astropy.io.fits")
+    sessions = sorted(tmp_path.glob("tokyo_drift_*"))
+    assert len(sessions) == 2
+    for session, injected, rep in zip(sessions, injector.commands, result["repeats"]):
+        with open(session / "episode.json") as f:
+            episode = json.load(f)
+        assert episode["injected_error_coeffs"] is not None
+        np.testing.assert_allclose(rep["injected_error_coeffs"],
+                                   episode["injected_error_coeffs"])
+        np.testing.assert_allclose(
+            fits.getdata(session / "injected_command.fits"), injected)
+
+
+def test_injection_channel_must_differ_from_correction(hardware_profile):
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.run import run
+    cfg = _hw_config(hardware_profile,
+                     **{"SIMULATION.injection dm channel": "dm00disp04"})
+    with pytest.raises(ValueError, match="must differ"):
+        run(FakeVampires(), FakeSCEXAO(), config=cfg, configspec=SPEC)
+
+
+def test_refused_injection_aborts_episode_and_zeros(hardware_profile):
+    """An injection draw over the DM limits is never sent: the episode
+    aborts like any safety trip, and the channels end zeroed."""
+    pytest.importorskip("telescope_sim")
+    from fpwfsc.tokyo_drift.run import run
+    FakeSCEXAO.instances.clear()
+    cam, ao = FakeVampires(), FakeSCEXAO()
+    cfg = _hw_config(hardware_profile,
+                     **{"SIMULATION.injection dm channel": "dm00disp06",
+                        "SIMULATION.initial error rms": "50.0"})
+    result = run(cam, ao, config=cfg, configspec=SPEC)
+
+    loop = result["loop"]
+    assert loop["aborted"] == "dm_safety"
+    assert "injected WFE command" in loop["safety_error"]
+    assert loop["iterations"] == 0
+    injector, = [i for i in FakeSCEXAO.instances
+                 if i.dm_channel == "dm00disp06"]
+    # Refused injection never sent; only the end-of-run zero went out
+    assert len(injector.commands) == 1
+    np.testing.assert_array_equal(injector.commands[0], np.zeros((50, 50)))
 
 
 def test_hardware_branch_refuses_wrong_filter(hardware_profile):

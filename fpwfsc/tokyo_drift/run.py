@@ -88,7 +88,7 @@ def make_frame_reducer(bgds, estimate_background_from_border):
 
 
 def run(camera=None, aosystem=None, config=None, configspec=None,
-        my_event=None, plotter=None):
+        my_event=None, plotter=None, injector=None):
     """Run the Tokyo Drift control loop.
 
     Parameters
@@ -102,6 +102,13 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
         ``threading.Event`` used by the GUI to signal stop.
     plotter
         Optional live plotter (``tokyo_drift_plotter_qt.LivePlotter``).
+    injector
+        Optional DM wrapper (``set_dm_data``) for the WFE-injection
+        channel ([SIMULATION] 'injection dm channel', hardware only).
+        When None and a channel is configured, one is built as
+        ``type(aosystem)(dm_channel=<channel>)`` — only the raw
+        ``set_dm_data`` is used, so the wrapper's geometry parameters
+        are irrelevant.
 
     Returns
     -------
@@ -133,6 +140,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     wfe_seed = settings['SIMULATION']['wfe seed']
     initial_error_rms = settings['SIMULATION']['initial error rms']
     n_repeats = settings['SIMULATION']['n repeats']
+    injection_channel = settings['SIMULATION']['injection dm channel']
 
     flux_exponent = settings['SNR']['int phot flux exponent']
     frames_to_average = settings['SNR']['frames to average']
@@ -165,7 +173,7 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     # ------------------------------------------------------------------
     # Backends (simulated bench, or real-hardware wrapper instances)
     # ------------------------------------------------------------------
-    from .dm import DMSafetyBounds, TranslationDM
+    from .dm import DMSafetyBounds, DMSafetyError, TranslationDM
     from .loop import LeakyIntegrator, peak_flux_ratio, run_closed_loop
     from .mode_registry import mode_n_modes, mode_zernike_diameter
     from .predictors import CheatingOracle, RandomWalkPredictor
@@ -210,6 +218,28 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
             print("tokyo_drift: WARNING - no camera dark and no "
                   "background file; frames will be reduced without "
                   "background subtraction")
+
+    # Hardware WFE injection: a second DMcomb channel carries the drawn
+    # error (the DM sums its channels), so the loop fights a KNOWN
+    # injected wavefront instead of only the bench's natural NCPA.
+    if injection_channel and sim_mode:
+        print("tokyo_drift: 'injection dm channel' is ignored in sim "
+              "(the sim injects through the optical model)")
+        injector = None
+    elif injection_channel and not sim_mode:
+        if injection_channel == settings['DM']['dm channel']:
+            raise ValueError(
+                "injection dm channel must differ from the correction "
+                f"'dm channel' ({injection_channel!r}): the loop would "
+                "overwrite its own injection")
+        if injector is None:
+            # Same wrapper class as the correction DM; only the raw
+            # set_dm_data path is used, so geometry params don't matter.
+            injector = type(AOsystem)(dm_channel=injection_channel)
+        print(f"tokyo_drift: hardware WFE injection enabled on "
+              f"{injection_channel!r} (rms {initial_error_rms})")
+    else:
+        injector = None
 
     # Calibration is a separate, explicit step: the loop only ever
     # consumes a saved profile (fit one with the calibration harness /
@@ -332,123 +362,169 @@ def run(camera=None, aosystem=None, config=None, configspec=None,
     # ------------------------------------------------------------------
     episode_results = []
     error_coeffs = None
-    for episode in range(n_repeats):
-        if my_event.is_set():
-            break
-        if n_repeats > 1:
-            print(f"tokyo_drift: episode {episode + 1}/{n_repeats}")
-        if episode > 0:
-            # The loop images before it commands and never resets the
-            # DM, so each new episode must start it from zero (through
-            # the loop's own command path).
-            AOsystem.set_dm_data(
-                translator.command_microns(np.zeros(n_modes)))
-
-        # Inject the hidden wavefront error the loop must correct (sim
-        # only) — an EXTERNAL (NCPA-like) aberration in the training
-        # modal basis, NOT routed through the DM: cancelling it requires
-        # the DM's effective command-to-wavefront gain, which is what
-        # the calibrated dm_scale measures (the same physics the real
-        # bench absorbed into dm_actuate_scale ~1.4e-6 against a 1e-6
-        # nominal). set_modal_error replaces the previous episode's
-        # error. On hardware the real NCPA plays this role and nothing
-        # is injected.
-        if sim_mode:
-            error_coeffs = rng.normal(0.0, initial_error_rms, n_modes)
-            bench.set_modal_error(error_coeffs)
-
-        integrator = LeakyIntegrator(n_modes, gain=gain, leak=leak_factor)
-        # The NN needs a known diversity move before its first
-        # prediction (two otherwise-identical frames carry no temporal
-        # cue); the dummy predictors ignore actuation, so they run with
-        # no initial move.
-        initial_move = None
-        if predictor_name == 'oracle':
-            predictor = CheatingOracle(
-                residual_fn=lambda ec=error_coeffs, it=integrator:
-                    ec + it.state,
-                rng=rng)
-        elif predictor_name == 'model':
-            initial_move = rng.normal(0.0, model_initial_move_sigma,
-                                      n_modes)
-
-        logger = None
-        iteration_callback = None
-        if save_log:
-            from .session_log import SessionLogger
-            session_name = (f"{session_stamp}_r{episode:02d}"
-                            if n_repeats > 1 else session_stamp)
-            logger = SessionLogger(log_path, settings=settings,
-                                   session_name=session_name)
-            # The profile and the subtracted background travel with the
-            # log: config.json holds the profile only by path (possibly
-            # a GUI tempfile), and the dark's shm buffer gets
-            # overwritten.
-            logger.save_provenance(profile_path=calibration_profile,
-                                   background=bgds['bkgd'])
-            logger.save_episode(episode=episode, n_repeats=n_repeats,
-                                injected_error_coeffs=error_coeffs,
-                                initial_move=initial_move)
-            print(f"tokyo_drift: logging session to {logger.session_dir}")
-
-            def iteration_callback(payload, logger=logger):
-                sent = payload.get("command_sent", True)
-                logger.save_iteration(
-                    payload["iteration"],
-                    strehl=payload["strehl"],
-                    state=payload["state"],
-                    prediction=payload["prediction"],
-                    dm_command=payload["command"] if sent else None,
-                    dm_command_refused=(None if sent
-                                        else payload["command"]),
-                    safety_error=payload.get("safety_error"),
-                    raw=payload["raw"],
-                    processed=payload["processed"],
-                    camera_frames=(Camera.last_frames
-                                   if save_camera_frames else None),
-                )
-
-        result = run_closed_loop(
-            take_image, AOsystem.set_dm_data,
-            predictor, translator, integrator, preprocess, n_iter,
-            safety=safety,
-            average=frames_to_average,
-            initial_move=initial_move,
-            strehl_fn=strehl_fn,
-            strehl_early_stop=strehl_early_stop,
-            stop_event=my_event,
-            plotter=plotter,
-            ideal_psf=ideal.reference_psf,
-            iteration_callback=iteration_callback,
-        )
-        result["injected_error_coeffs"] = error_coeffs
-        result["initial_move"] = initial_move
-        if logger is not None:
-            logger.finalize(result)
-        episode_results.append(result)
-
-        if result["aborted"]:
-            # A refused command was never sent, but the last SENT command
-            # was by construction near the limits - never the state to
-            # leave parked on the DM. Zero it (a converged run, by
-            # contrast, deliberately leaves its solution on the DM for
-            # the save-flat workflow).
-            AOsystem.set_dm_data(
-                translator.command_microns(np.zeros(n_modes)))
-            print(f"tokyo_drift: episode aborted on DM safety after "
-                  f"{result['iterations']} iterations; DM zeroed "
-                  f"({result['safety_error']})")
-            # Every episode aborting from the start is systematic (bad
-            # gain / calibration), not unlucky WFE draws.
-            if (len(episode_results) == 3
-                    and all(r["aborted"] for r in episode_results)):
-                print("tokyo_drift: first 3 episodes all aborted on DM "
-                      "safety - stopping the run (check gain and "
-                      "calibration)")
+    try:
+        for episode in range(n_repeats):
+            if my_event.is_set():
                 break
-        else:
-            print(f"tokyo_drift: loop finished after "
-                  f"{result['iterations']} iterations.")
+            if n_repeats > 1:
+                print(f"tokyo_drift: episode {episode + 1}/{n_repeats}")
+            if episode > 0:
+                # The loop images before it commands and never resets the
+                # DM, so each new episode must start it from zero (through
+                # the loop's own command path).
+                AOsystem.set_dm_data(
+                    translator.command_microns(np.zeros(n_modes)))
+
+            # Inject the hidden wavefront error the loop must correct. In
+            # sim it is an EXTERNAL (NCPA-like) aberration in the training
+            # modal basis, NOT routed through the DM: cancelling it requires
+            # the DM's effective command-to-wavefront gain, which is what
+            # the calibrated dm_scale measures (the same physics the real
+            # bench absorbed into dm_actuate_scale ~1.4e-6 against a 1e-6
+            # nominal). set_modal_error replaces the previous episode's
+            # error. On hardware with an injector, the same modal draw is
+            # synthesized through the loop's own command translation and
+            # written to the injection DMcomb channel — a DM-borne error
+            # (through the same influence functions as corrections), the
+            # 2024 bench-session methodology. Without an injector the real
+            # NCPA plays this role and nothing is injected or recorded.
+            episode_abort = None
+            injected_command = None
+            if sim_mode:
+                error_coeffs = rng.normal(0.0, initial_error_rms, n_modes)
+                bench.set_modal_error(error_coeffs)
+            elif injector is not None:
+                error_coeffs = rng.normal(0.0, initial_error_rms, n_modes)
+                injection = translator.command_microns(error_coeffs)
+                try:
+                    safety.check(injection)
+                except DMSafetyError as exc:
+                    # Configured amplitude drew a command over the DM
+                    # limits: never sent; abort this episode like any other
+                    # safety trip and let the remaining episodes continue.
+                    episode_abort = f"injected WFE command: {exc}"
+                    print(f"tokyo_drift: SAFETY ABORT - {episode_abort}")
+                else:
+                    injector.set_dm_data(injection)
+                    injected_command = injection
+
+            integrator = LeakyIntegrator(n_modes, gain=gain, leak=leak_factor)
+            # The NN needs a known diversity move before its first
+            # prediction (two otherwise-identical frames carry no temporal
+            # cue); the dummy predictors ignore actuation, so they run with
+            # no initial move.
+            initial_move = None
+            if predictor_name == 'oracle':
+                predictor = CheatingOracle(
+                    residual_fn=lambda ec=error_coeffs, it=integrator:
+                        ec + it.state,
+                    rng=rng)
+            elif predictor_name == 'model':
+                initial_move = rng.normal(0.0, model_initial_move_sigma,
+                                          n_modes)
+
+            logger = None
+            iteration_callback = None
+            if save_log:
+                from .session_log import SessionLogger
+                session_name = (f"{session_stamp}_r{episode:02d}"
+                                if n_repeats > 1 else session_stamp)
+                logger = SessionLogger(log_path, settings=settings,
+                                       session_name=session_name)
+                # The profile and the subtracted background travel with the
+                # log: config.json holds the profile only by path (possibly
+                # a GUI tempfile), and the dark's shm buffer gets
+                # overwritten.
+                logger.save_provenance(profile_path=calibration_profile,
+                                       background=bgds['bkgd'])
+                logger.save_episode(episode=episode, n_repeats=n_repeats,
+                                    injected_error_coeffs=error_coeffs,
+                                    initial_move=initial_move,
+                                    injected_command=injected_command)
+                print(f"tokyo_drift: logging session to {logger.session_dir}")
+
+                def iteration_callback(payload, logger=logger):
+                    sent = payload.get("command_sent", True)
+                    logger.save_iteration(
+                        payload["iteration"],
+                        strehl=payload["strehl"],
+                        state=payload["state"],
+                        prediction=payload["prediction"],
+                        dm_command=payload["command"] if sent else None,
+                        dm_command_refused=(None if sent
+                                            else payload["command"]),
+                        safety_error=payload.get("safety_error"),
+                        raw=payload["raw"],
+                        processed=payload["processed"],
+                        camera_frames=(Camera.last_frames
+                                       if save_camera_frames else None),
+                    )
+
+            if episode_abort is not None:
+                # The injection itself was refused: the loop never ran.
+                result = {"strehls": np.full(n_iter, np.nan),
+                          "states": np.zeros((n_iter, n_modes)),
+                          "final_state": np.zeros(n_modes),
+                          "iterations": 0,
+                          "aborted": "dm_safety",
+                          "safety_error": episode_abort}
+            else:
+                result = run_closed_loop(
+                    take_image, AOsystem.set_dm_data,
+                    predictor, translator, integrator, preprocess, n_iter,
+                    safety=safety,
+                    average=frames_to_average,
+                    initial_move=initial_move,
+                    strehl_fn=strehl_fn,
+                    strehl_early_stop=strehl_early_stop,
+                    stop_event=my_event,
+                    plotter=plotter,
+                    ideal_psf=ideal.reference_psf,
+                    iteration_callback=iteration_callback,
+                )
+            result["injected_error_coeffs"] = error_coeffs
+            result["initial_move"] = initial_move
+            if logger is not None:
+                logger.finalize(result)
+            episode_results.append(result)
+
+            if result["aborted"]:
+                # A refused command was never sent, but the last SENT command
+                # was by construction near the limits - never the state to
+                # leave parked on the DM. Zero it (a converged run, by
+                # contrast, deliberately leaves its solution on the DM for
+                # the save-flat workflow).
+                AOsystem.set_dm_data(
+                    translator.command_microns(np.zeros(n_modes)))
+                print(f"tokyo_drift: episode aborted on DM safety after "
+                      f"{result['iterations']} iterations; DM zeroed "
+                      f"({result['safety_error']})")
+                # Every episode aborting from the start is systematic (bad
+                # gain / calibration), not unlucky WFE draws.
+                if (len(episode_results) == 3
+                        and all(r["aborted"] for r in episode_results)):
+                    print("tokyo_drift: first 3 episodes all aborted on DM "
+                          "safety - stopping the run (check gain and "
+                          "calibration)")
+                    break
+            else:
+                print(f"tokyo_drift: loop finished after "
+                      f"{result['iterations']} iterations.")
+
+    finally:
+        # An injection run must never leave the bench aberrated:
+        # whatever ends it (completion, stop, abort, exception),
+        # clear the injection channel AND the correction channel -
+        # with the injection gone, the converged correction would
+        # itself aberrate the bench (and it is episode-specific,
+        # not a reusable flat). NCPA-only runs keep the current
+        # behavior: the converged state stays on the DM.
+        if injector is not None:
+            zero = translator.command_microns(np.zeros(n_modes))
+            injector.set_dm_data(zero)
+            AOsystem.set_dm_data(zero)
+            print("tokyo_drift: injection and correction channels "
+                  "zeroed")
 
     n_aborted = sum(1 for r in episode_results if r["aborted"])
     if n_aborted and len(episode_results) > 1:
